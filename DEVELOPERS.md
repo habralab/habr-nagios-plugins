@@ -75,12 +75,58 @@ This keeps deployment simple:
 - copy one binary
 - run one binary
 
+## Build System
+
+The root `Makefile` is intentionally generic.
+
+Current behavior:
+
+- discovers binaries from `cmd/*/main.go`
+- builds each discovered binary into `build/<probe>`
+- cross-builds each discovered binary for the supported target matrix
+- keeps Go cache local to the repository through `.gocache/`
+- keeps module cache local to the repository through `.gomodcache/`
+- injects build metadata into binaries, using repository state when available
+
+This is important for the intended growth model:
+
+- adding a new probe should usually mean adding a new `cmd/<probe>/main.go`
+- the main `make build` and `make cross` flows should start including it automatically
+- existing binaries should not require manual Makefile duplication per probe
+
+If a probe eventually needs custom packaging, that should be added without breaking the generic default path for ordinary binaries.
+
+## Version Metadata
+
+Binary version output should come from build-time metadata, not hardcoded constants inside probe apps.
+
+Current policy:
+
+- if `HEAD` is exactly on a git tag, use that tag as the version
+- otherwise use the current branch name when available
+- if git metadata is unavailable or `HEAD` is detached, fall back to `dev`
+- always append the short commit hash when available
+- append `-dirty` to the commit hash when the worktree is not clean
+
+Examples:
+
+- `check_example v0.1.0 (abc123def456)`
+- `check_example main (abc123def456)`
+- `check_example dev (abc123def456-dirty)`
+
+Implementation rule:
+
+- shared formatting lives in `internal/core/buildinfo`
+- build metadata is injected by `Makefile` through `go build -ldflags`
+- probe binaries should only ask the shared module for a display string
+
 ## Shared Core
 
 Shared modules should stay narrow and reusable.
 
 Likely core areas:
 
+- probe metadata and naming policy
 - finding catalog and suppression policy
 - HTTP client and tracing helpers
 - DNS helpers
@@ -88,6 +134,41 @@ Likely core areas:
 - output rendering
 
 Probe-specific logic should stay out of shared modules until there is a real second consumer.
+
+## Probe Identity And Naming
+
+Each probe should have a stable internal identity based on a slug.
+
+Current example:
+
+- slug: `example`
+
+The slug is the canonical probe identity and should be used for:
+
+- package paths
+- probe metadata
+- package naming
+- future release asset naming
+
+Binary names are deployment-specific and should be derived from metadata rather than hardcoded ad hoc in multiple places.
+
+Current convention:
+
+- default local/developer binary name: `check_<slug>`
+- shared/system install binary name: `check_<vendor>_<slug>`
+- Debian package name: `<vendor>-nagios-plugin-<slug>`
+
+Current example values for example:
+
+- dev binary: `check_example`
+- namespaced install binary: `check_habr_example`
+- package name: `habr-nagios-plugin-example`
+
+Implementation rule:
+
+- generic naming helpers live in `internal/core/probemeta`
+- probe-local metadata lives near the probe, e.g. `internal/probe/example/meta.go`
+- CLI help, version output, and later packaging helpers should read from probe metadata instead of duplicating names
 
 ## Deliberate Constraints
 
@@ -156,3 +237,12 @@ Preferred outcome:
 - shared internal modules
 - multiple independent binaries
 - no unnecessary code pulled into a given final artifact
+
+## Documentation Split
+
+Keep public and developer-facing documentation separate:
+
+- `README.md`: repository purpose, current probes, basic build commands, release-facing overview
+- `DEVELOPERS.md`: architecture, module boundaries, build model, testing expectations, future extension rules
+
+When adding a new probe, update both only where it changes repository-level understanding. Detailed probe behavior belongs near the probe code or in probe-specific docs later.
