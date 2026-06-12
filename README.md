@@ -25,7 +25,7 @@ The repository is still early, but the base structure is already aligned with a 
 make build
 ```
 
-This builds every binary that has an entrypoint at `cmd/*/main.go` into `build/`.
+This builds every probe binary that has an entrypoint at `cmd/probes/*/main.go` into `build/`.
 The default build is release-oriented: it uses `-trimpath` and stripped ldflags to keep production artifacts smaller.
 
 By default, a probe with slug `<slug>` is built as `build/check_<slug>`.

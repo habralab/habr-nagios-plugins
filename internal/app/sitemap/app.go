@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,15 +17,17 @@ import (
 	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
 )
 
-func Run(args []string) int {
-	cfg, err := parseFlags(args)
+func Run(programName string, args []string) int {
+	binName := effectiveProgramName(programName)
+
+	cfg, err := parseFlags(binName, args)
 	if err != nil {
 		fmt.Printf("UNKNOWN - %v\n", err)
 		return sitemap.ExitUnknown
 	}
 
 	if cfg.ShowVersion {
-		fmt.Println(buildinfo.String(sitemap.Meta.DefaultBinaryName()))
+		fmt.Println(buildinfo.String(binName))
 		return sitemap.ExitOK
 	}
 
@@ -36,7 +39,7 @@ func Run(args []string) int {
 	}
 
 	if cfg.ShowHelp {
-		printHelp()
+		printHelp(binName)
 		return sitemap.ExitOK
 	}
 
@@ -63,13 +66,13 @@ func Run(args []string) int {
 	return result.ExitCode()
 }
 
-func parseFlags(args []string) (sitemap.Config, error) {
+func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	normalizedArgs, baseVerbosity, err := normalizeVerbosityArgs(args)
 	if err != nil {
 		return sitemap.Config{}, err
 	}
 
-	fs := flag.NewFlagSet(sitemap.Meta.DefaultBinaryName(), flag.ContinueOnError)
+	fs := flag.NewFlagSet(binName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	cfg := sitemap.DefaultConfig()
@@ -204,8 +207,7 @@ func clampVerbosity(v int) int {
 	return v
 }
 
-func printHelp() {
-	binName := sitemap.Meta.DefaultBinaryName()
+func printHelp(binName string) {
 	options := []clihelp.Option{
 		{
 			Long: "--allow-cross-host",
@@ -302,4 +304,12 @@ Usage:
 
 Options:
 %s`, binName, sitemap.Meta.Summary, binName, binName, binName, clihelp.RenderOptions(options))
+}
+
+func effectiveProgramName(programName string) string {
+	name := strings.TrimSpace(filepath.Base(programName))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return sitemap.Meta.DefaultBinaryName()
+	}
+	return name
 }

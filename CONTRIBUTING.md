@@ -6,7 +6,8 @@ This repository hosts small, self-contained monitoring binaries with shared inte
 
 Please keep contributions aligned with these constraints:
 
-- separate binaries per probe under `cmd/`
+- separate probe binaries under `cmd/probes/`
+- internal helper tools under `cmd/tools/` when needed
 - reusable shared logic under `internal/core/`
 - domain-specific logic under `internal/probe/`
 - static, portable binaries as a first-class goal
@@ -25,7 +26,7 @@ Tests should avoid external network calls by default. Prefer in-process mocks an
 
 When adding a new probe:
 
-1. add a thin binary in `cmd/<name>`
+1. add a thin binary in `cmd/probes/<name>`
 2. add CLI wiring in `internal/app/<name>cmd`
 3. add probe logic in `internal/probe/<name>`
 4. reuse shared modules instead of duplicating transport, finding, or output logic

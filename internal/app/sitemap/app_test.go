@@ -8,8 +8,10 @@ import (
 	"testing"
 )
 
+const testProgramName = "check_sitemap"
+
 func TestParseFlagsCoversCommonOptions(t *testing.T) {
-	cfg, err := parseFlags([]string{
+	cfg, err := parseFlags(testProgramName, []string{
 		"-H", "example.com",
 		"--strict",
 		"--allow-cross-host",
@@ -68,7 +70,7 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 }
 
 func TestParseFlagsListErrorSlugs(t *testing.T) {
-	cfg, err := parseFlags([]string{"--list-error-slugs"})
+	cfg, err := parseFlags(testProgramName, []string{"--list-error-slugs"})
 	if err != nil {
 		t.Fatalf("parseFlags() error = %v", err)
 	}
@@ -78,14 +80,14 @@ func TestParseFlagsListErrorSlugs(t *testing.T) {
 }
 
 func TestParseFlagsRejectsUnknownIgnoredSlug(t *testing.T) {
-	_, err := parseFlags([]string{"-H", "example.com", "--ignore-errors", "unknown_slug"})
+	_, err := parseFlags(testProgramName, []string{"-H", "example.com", "--ignore-errors", "unknown_slug"})
 	if err == nil || !strings.Contains(err.Error(), `unknown ignored error slug "unknown_slug"`) {
 		t.Fatalf("parseFlags() error = %v, want unknown slug error", err)
 	}
 }
 
 func TestRunListErrorSlugs(t *testing.T) {
-	exitCode, output := runWithCapturedStdout(t, []string{"--list-error-slugs"})
+	exitCode, output := runWithCapturedStdout(t, testProgramName, []string{"--list-error-slugs"})
 
 	if exitCode != 0 {
 		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
@@ -96,7 +98,7 @@ func TestRunListErrorSlugs(t *testing.T) {
 }
 
 func TestParseFlagsCombinesVerbosityFormsAndClamps(t *testing.T) {
-	cfg, err := parseFlags([]string{
+	cfg, err := parseFlags(testProgramName, []string{
 		"-H", "example.com",
 		"-v",
 		"--verbose", "2",
@@ -111,7 +113,7 @@ func TestParseFlagsCombinesVerbosityFormsAndClamps(t *testing.T) {
 }
 
 func TestParseFlagsStoresOverlappingTargetInputs(t *testing.T) {
-	cfg, err := parseFlags([]string{
+	cfg, err := parseFlags(testProgramName, []string{
 		"-H", "example.com",
 		"-u", "http://docs.example.net",
 		"--entrypoint", "https://example.com/sitemap.xml",
@@ -135,21 +137,21 @@ func TestParseFlagsStoresOverlappingTargetInputs(t *testing.T) {
 }
 
 func TestParseFlagsRejectsInvalidFallbackStatus(t *testing.T) {
-	_, err := parseFlags([]string{"-H", "example.com", "--fallback-status", "critical"})
+	_, err := parseFlags(testProgramName, []string{"-H", "example.com", "--fallback-status", "critical"})
 	if err == nil || !strings.Contains(err.Error(), "fallback-status must be one of: ok, warn") {
 		t.Fatalf("parseFlags() error = %v, want invalid fallback status error", err)
 	}
 }
 
 func TestParseFlagsRejectsInvalidFallbackPath(t *testing.T) {
-	_, err := parseFlags([]string{"-H", "example.com", "--fallback-paths", "sitemap.xml,/sitemap.xml"})
+	_, err := parseFlags(testProgramName, []string{"-H", "example.com", "--fallback-paths", "sitemap.xml,/sitemap.xml"})
 	if err == nil || !strings.Contains(err.Error(), "fallback paths must start with /") {
 		t.Fatalf("parseFlags() error = %v, want invalid fallback path error", err)
 	}
 }
 
 func TestParseFlagsAllowsDisablingFallback(t *testing.T) {
-	cfg, err := parseFlags([]string{"-H", "example.com", "--fallback=false"})
+	cfg, err := parseFlags(testProgramName, []string{"-H", "example.com", "--fallback=false"})
 	if err != nil {
 		t.Fatalf("parseFlags() error = %v", err)
 	}
@@ -159,7 +161,7 @@ func TestParseFlagsAllowsDisablingFallback(t *testing.T) {
 }
 
 func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
-	exitCode, output := runWithCapturedStdout(t, []string{"--help"})
+	exitCode, output := runWithCapturedStdout(t, "check_habr_sitemap", []string{"--help"})
 	if exitCode != 0 {
 		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
 	}
@@ -174,10 +176,13 @@ func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
 			t.Fatalf("Run() help output missing %q in:\n%s", snippet, output)
 		}
 	}
+	if !strings.Contains(output, "check_habr_sitemap") {
+		t.Fatalf("Run() help output = %q, want installed binary name", output)
+	}
 }
 
 func TestRunRejectsMissingTarget(t *testing.T) {
-	exitCode, output := runWithCapturedStdout(t, nil)
+	exitCode, output := runWithCapturedStdout(t, "check_sitemap", nil)
 	if exitCode != 3 {
 		t.Fatalf("Run() exitCode = %d, want 3", exitCode)
 	}
@@ -187,7 +192,7 @@ func TestRunRejectsMissingTarget(t *testing.T) {
 }
 
 func TestRunRejectsInvalidFallbackStatus(t *testing.T) {
-	exitCode, output := runWithCapturedStdout(t, []string{"-H", "example.com", "--fallback-status", "critical"})
+	exitCode, output := runWithCapturedStdout(t, "check_sitemap", []string{"-H", "example.com", "--fallback-status", "critical"})
 	if exitCode != 3 {
 		t.Fatalf("Run() exitCode = %d, want 3", exitCode)
 	}
@@ -197,16 +202,16 @@ func TestRunRejectsInvalidFallbackStatus(t *testing.T) {
 }
 
 func TestRunVersionPrintsBinaryNameAndMetadata(t *testing.T) {
-	exitCode, output := runWithCapturedStdout(t, []string{"--version"})
+	exitCode, output := runWithCapturedStdout(t, "check_habr_sitemap", []string{"--version"})
 	if exitCode != 0 {
 		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(output), "check_sitemap ") {
+	if !strings.HasPrefix(strings.TrimSpace(output), "check_habr_sitemap ") {
 		t.Fatalf("Run() output = %q, want version string starting with binary name", output)
 	}
 }
 
-func runWithCapturedStdout(t *testing.T, args []string) (int, string) {
+func runWithCapturedStdout(t *testing.T, programName string, args []string) (int, string) {
 	t.Helper()
 
 	oldStdout := os.Stdout
@@ -218,7 +223,7 @@ func runWithCapturedStdout(t *testing.T, args []string) (int, string) {
 	os.Stdout = w
 	defer func() { os.Stdout = oldStdout }()
 
-	exitCode := Run(args)
+	exitCode := Run(programName, args)
 	w.Close()
 
 	var out bytes.Buffer

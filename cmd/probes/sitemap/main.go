@@ -7,5 +7,5 @@ import (
 )
 
 func main() {
-	os.Exit(sitemapapp.Run(os.Args[1:]))
+	os.Exit(sitemapapp.Run(os.Args[0], os.Args[1:]))
 }

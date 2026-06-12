@@ -38,7 +38,8 @@ Go is the default implementation language for this repository because it optimiz
 
 Current layout:
 
-- `cmd/<probe>`: thin binary entrypoints
+- `cmd/probes/<probe>`: thin probe binary entrypoints
+- `cmd/tools/<tool>`: internal helper entrypoints that support packaging or development but are not deployable monitoring probes
 - `internal/app/<probe>`: CLI parsing and command wiring
 - `internal/probe/<probe>`: probe implementation
 - `internal/core/...`: shared building blocks
@@ -56,7 +57,8 @@ Internal flow:
 
 The intended long-term shape is:
 
-- `cmd/<probe>`: one binary per probe
+- `cmd/probes/<probe>`: one binary per probe
+- `cmd/tools/<tool>`: repository-local helper tools
 - `internal/app/<probe>`: CLI wiring for that probe
 - `internal/probe/<probe>`: domain-specific check logic
 - `internal/core/...`: reusable building blocks shared across probes
@@ -81,9 +83,10 @@ The root `Makefile` is intentionally generic.
 
 Current behavior:
 
-- discovers binaries from `cmd/*/main.go`
-- treats the `cmd/` directory name as the probe slug
+- discovers probes from `cmd/probes/*/main.go`
+- treats the probe directory name as the probe slug
 - builds each discovered probe into `build/check_<slug>`
+- keeps `cmd/tools/*` outside ordinary probe build and cross-build targets
 - uses a release-oriented default build with `-trimpath` and stripped ldflags
 - keeps a separate `build-debug` target for local symbol-rich binaries
 - cross-builds each discovered binary for the supported target matrix
@@ -93,7 +96,7 @@ Current behavior:
 
 This is important for the intended growth model:
 
-- adding a new probe should usually mean adding a new `cmd/<probe>/main.go`
+- adding a new probe should usually mean adding a new `cmd/probes/<probe>/main.go`
 - the main `make build` and `make cross` flows should start including it automatically
 - existing binaries should not require manual Makefile duplication per probe
 
@@ -168,7 +171,7 @@ Binary names are deployment-specific and should be derived from metadata rather 
 
 Current convention:
 
-- `cmd/<slug>` is the canonical CLI entrypoint path
+- `cmd/probes/<slug>` is the canonical probe CLI entrypoint path
 - default local/developer binary name: `check_<slug>`
 - shared/system install binary name: `check_<vendor>_<slug>`
 - Debian package name: `<vendor>-nagios-plugin-<slug>`
@@ -184,6 +187,68 @@ Implementation rule:
 - generic naming helpers live in `internal/core/probemeta`
 - probe-local metadata lives near the probe, e.g. `internal/probe/example/meta.go`
 - CLI help, version output, and later packaging helpers should read from probe metadata instead of duplicating names
+
+## Packaging Direction
+
+Debian packaging should stay in this repository, not in a separate downstream-only packaging repository.
+
+Current packaging goals:
+
+- one upstream repository
+- Debian-first packaging scaffold
+- probe-specific binary packages
+- minimal duplication between probe metadata and Debian manifests
+
+Current Debian conventions:
+
+- source package name: `habr-nagios-plugins`
+- binary package name: `<vendor>-nagios-plugin-<slug>`
+- installed plugin path: `/usr/lib/nagios/plugins/check_<vendor>_<slug>`
+- local developer binary path: `build/check_<slug>`
+- packaging builds should emit the final installed binary name directly, e.g. `build/check_habr_sitemap`, instead of relying on a later filesystem rename step
+
+Packaging helpers should derive probe-specific names from probe metadata instead of restating them manually in multiple Debian files.
+
+Current implementation direction:
+
+- static shared Debian files live in `debian/`
+- `debian/control` is committed and edited as an ordinary Debian manifest
+- `debian/changelog` is committed and should normally be updated manually
+- generated Debian files are limited to probe-specific `*.install` and `*.docs`
+- probe discovery for packaging lives in `internal/packaging/catalog`
+- Debian rendering logic lives in `internal/packaging/debianmeta`
+
+Current Makefile flow:
+
+- `make package-prepare` refreshes probe-specific install/docs files from current probe metadata and those files are expected to be committed when they change
+- `make package-changelog` can generate a snapshot changelog entry for local or CI builds, but is not part of the default package flow
+- `make package-deb` builds binary packages with `dpkg-buildpackage` and assumes `debian/changelog` is already appropriate for the target distribution/version
+- `make package-deb-source` builds source packages under the same assumption
+- `make package-clean` removes Debian build staging artifacts without touching committed manifests
+- generic Go build knobs `GO_BUILDMODE` and `GO_EXTRA_LDFLAGS` exist so packaging can request Linux hardening flags without changing ordinary local builds
+- packaging builds can override `BIN_VENDOR` so the built artifact name matches the final installed binary name
+
+Maintainer identity rules for generated Debian metadata:
+
+- `DEBFULLNAME` and `DEBEMAIL` should be preferred when set
+- `git config user.name` and `git config user.email` are the next fallback
+- if neither source is available, generated files should use `Local Builder <builder@example.org>`
+- packaging helpers should not synthesize maintainer addresses from transient local hostnames such as `.localdomain`
+
+Versioning rules for Debian packaging:
+
+- release tags should become Debian upstream versions without a leading `v`
+- unreleased builds should fall back to a deterministic snapshot version such as `0~gitYYYYMMDD.<commit>`
+- Debian revision stays separate from upstream version and defaults to `1`
+
+The packaging scaffold should stay conservative:
+
+- no runtime plugin loader
+- no probe-name duplication across helper, metadata, and Debian manifests
+- no packaging-only renaming rules hidden inside probe code
+- do not auto-regenerate `debian/control` during ordinary prepare/build steps
+- do not auto-regenerate `*.install` and `*.docs` during ordinary build steps either; refresh them explicitly in prepare flows and review them in VCS
+- keep `debian/changelog` human-readable and VCS-reviewable by default; treat snapshot changelog generation as an opt-in helper rather than mandatory build machinery
 
 ## Deliberate Constraints
 

@@ -1,0 +1,16 @@
+Source: habr-nagios-plugins
+Section: net
+Priority: optional
+Maintainer: Vadim Rybalko <vadim@bionicman.name>
+Build-Depends: debhelper-compat (= 13), golang-any
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/habralab/habr-nagios-plugins
+
+Package: habr-nagios-plugin-sitemap
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Validate website sitemap trees for Nagios-style monitoring
+ Habr Nagios Plugins probe package for sitemap monitoring.
+ .
+ Installs the check_habr_sitemap plugin under /usr/lib/nagios/plugins/.

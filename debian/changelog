@@ -1,0 +1,5 @@
+habr-nagios-plugins (0.0.0-1) unstable; urgency=medium
+
+  * Bootstrap Debian packaging scaffold.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Fri, 12 Jun 2026 12:00:00 +0000
