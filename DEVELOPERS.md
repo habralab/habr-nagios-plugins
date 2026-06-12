@@ -39,7 +39,7 @@ Go is the default implementation language for this repository because it optimiz
 Current layout:
 
 - `cmd/<probe>`: thin binary entrypoints
-- `internal/app/<probe>cmd`: CLI parsing and command wiring
+- `internal/app/<probe>`: CLI parsing and command wiring
 - `internal/probe/<probe>`: probe implementation
 - `internal/core/...`: shared building blocks
 - `internal/probe/<probe>/testdata`: local fixtures for no-network tests
@@ -57,7 +57,7 @@ Internal flow:
 The intended long-term shape is:
 
 - `cmd/<probe>`: one binary per probe
-- `internal/app/<probe>cmd`: CLI wiring for that probe
+- `internal/app/<probe>`: CLI wiring for that probe
 - `internal/probe/<probe>`: domain-specific check logic
 - `internal/core/...`: reusable building blocks shared across probes
 
@@ -82,7 +82,10 @@ The root `Makefile` is intentionally generic.
 Current behavior:
 
 - discovers binaries from `cmd/*/main.go`
-- builds each discovered binary into `build/<probe>`
+- treats the `cmd/` directory name as the probe slug
+- builds each discovered probe into `build/check_<slug>`
+- uses a release-oriented default build with `-trimpath` and stripped ldflags
+- keeps a separate `build-debug` target for local symbol-rich binaries
 - cross-builds each discovered binary for the supported target matrix
 - keeps Go cache local to the repository through `.gocache/`
 - keeps module cache local to the repository through `.gomodcache/`
@@ -135,6 +138,15 @@ Likely core areas:
 
 Probe-specific logic should stay out of shared modules until there is a real second consumer.
 
+The current HTTP/TLS transport options are intended to converge in shared modules rather than being redefined per probe.
+
+Current direction:
+
+- shared client construction lives in `internal/core/httpx`
+- shared HTTP/TLS-related help text should live near that module
+- probe apps should aggregate shared and probe-local flags into one help output
+- shared options should appear in a stable order in CLI help
+
 ## Probe Identity And Naming
 
 Each probe should have a stable internal identity based on a slug.
@@ -154,6 +166,7 @@ Binary names are deployment-specific and should be derived from metadata rather 
 
 Current convention:
 
+- `cmd/<slug>` is the canonical CLI entrypoint path
 - default local/developer binary name: `check_<slug>`
 - shared/system install binary name: `check_<vendor>_<slug>`
 - Debian package name: `<vendor>-nagios-plugin-<slug>`
@@ -191,11 +204,18 @@ Tests should prefer local and deterministic coverage:
 - no-network unit tests by default
 - integration tests only where they add real confidence
 
+For HTTP-heavy probes, both styles are useful:
+
+- mock transport tests for precise error classification and summary/detail assertions
+- opt-in live tests with a lightweight local HTTP server for redirects, headers, and parser behavior under real `net/http`
+
 Each new probe should reserve a place for:
 
 - package-local unit tests
 - `testdata/` fixtures when format-heavy parsing exists
 - mockable transport or resolver interfaces where external I/O is involved
+
+The root `Makefile` may expose a separate target for opt-in integration suites, such as `test-live`, when those tests require a local listener and are not safe in every sandboxed environment.
 
 ## CLI Philosophy
 
@@ -220,6 +240,8 @@ CLI design principles:
 
 Concrete probe flags should be documented alongside each binary once they exist.
 
+If a probe uses shared HTTP/TLS options, the shared flag descriptions should stay attached to the shared module and be rendered into the final help text rather than duplicated manually across probe apps.
+
 ## Build and Release Expectations
 
 This project should remain easy to build on macOS and Linux, and easy to cross-compile for:
@@ -237,6 +259,12 @@ Preferred outcome:
 - shared internal modules
 - multiple independent binaries
 - no unnecessary code pulled into a given final artifact
+
+Build-size expectation:
+
+- production-facing binaries should default to stripped builds
+- debug symbols should be opt-in for local development
+- if a binary becomes unexpectedly large, inspect sections and symbols before guessing
 
 ## Documentation Split
 

@@ -26,6 +26,15 @@ make build
 ```
 
 This builds every binary that has an entrypoint at `cmd/*/main.go` into `build/`.
+The default build is release-oriented: it uses `-trimpath` and stripped ldflags to keep production artifacts smaller.
+
+By default, a probe with slug `<slug>` is built as `build/check_<slug>`.
+
+If you need a debug-friendlier local binary with symbols intact:
+
+```bash
+make build-debug
+```
 
 ## Cross-build
 
