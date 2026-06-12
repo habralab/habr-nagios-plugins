@@ -4,18 +4,22 @@ Small self-contained monitoring plugins for Nagios, Icinga, LibreNMS, and simila
 
 Repository: `https://github.com/habralab/habr-nagios-plugins`
 
-## Current State
+## Current Probe
 
-- repository skeleton
-- shared layout for future probe binaries
-- project-level build and contribution scaffolding
+The first released probe is `check_sitemap`.
 
-The repository is still early, but the base structure is already aligned with a multi-binary monitoring toolkit.
+It validates sitemap discovery and sitemap tree integrity in a way that is useful for monitoring:
+
+- `OK`, `WARNING`, `CRITICAL`, and `UNKNOWN` exit codes
+- short Nagios-style summary output by default
+- deeper diagnostics through `-v`, `-vv`, and `-vvv`
+- support for `robots.txt`, sitemap indexes, XML/text sitemaps, and `.gz`
+- Debian packaging as `habr-nagios-plugin-sitemap`
 
 ## Goals
 
 - separate binary per check type
-- static or otherwise self-contained deliverables
+- self-contained operational delivery
 - predictable Nagios-style CLI behavior
 - minimal runtime dependencies
 
@@ -25,21 +29,59 @@ The repository is still early, but the base structure is already aligned with a 
 make build
 ```
 
-This builds every probe binary that has an entrypoint at `cmd/probes/*/main.go` into `build/`.
-The default build is release-oriented: it uses `-trimpath` and stripped ldflags to keep production artifacts smaller.
+This builds every probe entrypoint found under `cmd/probes/*/main.go` into `build/`.
 
-By default, a probe with slug `<slug>` is built as `build/check_<slug>`.
+Default local output for the sitemap probe:
 
-If you need a debug-friendlier local binary with symbols intact:
+```bash
+build/check_sitemap
+```
+
+If you need a debug-friendlier local build with symbols intact:
 
 ```bash
 make build-debug
+```
+
+## Usage
+
+```bash
+./build/check_sitemap -H example.com
+./build/check_sitemap -H example.com -vv
+./build/check_sitemap --entrypoint https://example.com/sitemap.xml
+```
+
+Installed Debian package payload:
+
+```bash
+/usr/lib/nagios/plugins/check_habr_sitemap
 ```
 
 ## Cross-build
 
 ```bash
 make cross
+```
+
+## Debian Packaging
+
+Prepare committed Debian manifests derived from probe metadata:
+
+```bash
+make package-prepare
+```
+
+Build a Debian package:
+
+```bash
+make package-deb
+```
+
+For target-specific Ubuntu builds, refresh the changelog entry first:
+
+```bash
+make package-changelog DEB_DISTRIBUTION=noble VERSION=v1.0.0
+make package-deb
 ```
 
 ## Versioning
@@ -50,14 +92,6 @@ Built binaries report version metadata via `-V`:
 - untagged build on a branch: branch name plus commit hash
 - detached `HEAD` or no git metadata: `dev` plus commit hash when available
 - dirty worktree: `-dirty` suffix on the commit hash
-
-## Cross-build Behavior
-
-This cross-builds every discovered binary for the supported Linux and macOS targets.
-
-## Status
-
-The repository is being bootstrapped in layers. The structure is intended to remain stable while individual probes are added and evolved.
 
 ## License
 

@@ -1,5 +1,7 @@
-habr-nagios-plugins (0.0.0-1) unstable; urgency=medium
+habr-nagios-plugins (1.0.0-1) unstable; urgency=medium
 
-  * Bootstrap Debian packaging scaffold.
+  * First public release.
+  * Add the initial sitemap monitoring probe.
+  * Add Debian packaging for the sitemap probe.
 
  -- Vadim Rybalko <vadim@bionicman.name>  Fri, 12 Jun 2026 12:00:00 +0000
