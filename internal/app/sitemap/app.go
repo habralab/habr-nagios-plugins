@@ -87,13 +87,13 @@ func parseFlags(args []string) (sitemap.Config, error) {
 	fs.BoolVar(&cfg.Strict, "strict", false, "enforce stricter host/path expectations")
 	fs.BoolVar(&cfg.FallbackProbe, "fallback", true, "probe default sitemap locations when robots.txt has no sitemap")
 	fs.BoolVar(&cfg.AllowCrossHost, "allow-cross-host", false, "allow child sitemap URLs on hosts different from the parent sitemap host")
-	fs.IntVar(&cfg.MaxDepth, "max-depth", 8, "maximum sitemap tree depth")
-	fs.IntVar(&cfg.MaxFiles, "max-files", 500, "maximum number of sitemap documents to fetch")
+	fs.IntVar(&cfg.MaxDepth, "max-depth", 0, "maximum sitemap tree depth, 0 disables the limit")
+	fs.IntVar(&cfg.MaxFiles, "max-files", 0, "maximum number of sitemap documents to fetch, 0 disables the limit")
 	fs.IntVar(&cfg.MaxURLs, "max-urls", 0, "maximum number of url entries to parse across the tree, 0 disables the limit")
-	fs.StringVar(&cfg.HTTP.UserAgent, "user-agent", sitemap.DefaultUserAgent, "HTTP User-Agent")
+	fs.StringVar(&cfg.HTTP.UserAgent, "user-agent", httpx.DefaultUserAgent(), "HTTP User-Agent")
 	fs.BoolVar(&cfg.HTTP.InsecureSkipVerify, "insecure-skip-verify", false, "disable TLS certificate verification for HTTP requests")
-	fs.StringVar(&timeout, "t", "10s", "overall timeout")
-	fs.StringVar(&timeout, "timeout", "10s", "overall timeout")
+	fs.StringVar(&timeout, "t", "60s", "overall timeout")
+	fs.StringVar(&timeout, "timeout", "60s", "overall timeout")
 	fs.StringVar(&fallbackPaths, "fallback-paths", strings.Join(sitemap.DefaultFallbackPaths, ","), "comma-separated fallback paths")
 	fs.StringVar(&cfg.FallbackStatus, "fallback-status", string(sitemap.FallbackWarn), "severity when sitemap is resolved only via fallback: ok|warn")
 	fs.StringVar(&ignoreErrors, "ignore-errors", "", "comma-separated error slugs to suppress")
@@ -263,8 +263,8 @@ func printHelp() {
 			},
 		},
 		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs and exit."},
-		{Long: "--max-depth", Description: "Maximum sitemap tree depth before traversal stops.", Examples: []string{"--max-depth 8"}},
-		{Long: "--max-files", Description: "Maximum number of sitemap documents to fetch.", Examples: []string{"--max-files 500"}},
+		{Long: "--max-depth", Description: "Maximum sitemap tree depth before traversal stops.\nUse 0 to disable the limit.", Examples: []string{"--max-depth 0", "--max-depth 8"}},
+		{Long: "--max-files", Description: "Maximum number of sitemap documents to fetch.\nUse 0 to disable the limit.", Examples: []string{"--max-files 0", "--max-files 500"}},
 		{Long: "--max-urls", Description: "Maximum number of URL entries to parse across the whole tree.\nUse 0 to disable the limit.", Examples: []string{"--max-urls 0", "--max-urls 200000"}},
 		{
 			Long:        "--robots-url",
@@ -275,7 +275,7 @@ func printHelp() {
 		},
 		{Long: "--strict", Description: "Enforce stricter host and path expectations for child sitemap validation.\n" +
 			"Escalate selected scope validation findings from warning to critical."},
-		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.", Examples: []string{"-t 10s", "--timeout 30s"}},
+		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 60s.", Examples: []string{"-t 60s", "--timeout 300s"}},
 		{
 			Short: "-u",
 			Long:  "--url",

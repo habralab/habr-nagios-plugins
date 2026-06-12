@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -20,8 +21,6 @@ import (
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 )
-
-var DefaultUserAgent = Meta.DefaultBinaryName() + "/0.1"
 
 const (
 	ExitOK       = 0
@@ -76,13 +75,13 @@ func DefaultConfig() Config {
 		FallbackProbe:  true,
 		Verbosity:      0,
 		FallbackStatus: string(FallbackWarn),
-		MaxDepth:       8,
-		MaxFiles:       500,
+		MaxDepth:       0,
+		MaxFiles:       0,
 		MaxURLs:        0,
 		HTTP: httpx.Options{
-			UserAgent: DefaultUserAgent,
+			UserAgent: httpx.DefaultUserAgent(),
 		},
-		Timeout:        10 * time.Second,
+		Timeout:        60 * time.Second,
 		FallbackPaths:  slices.Clone(DefaultFallbackPaths),
 		IgnoreErrorSet: map[string]bool{},
 	}
@@ -110,6 +109,11 @@ type Result struct {
 	TargetSource     string
 	EffectiveBaseURL string
 	TotalURLs        int
+	TotalNetBytes    int
+	TotalRawBytes    int
+	Elapsed          time.Duration
+	PeakHeapAlloc    uint64
+	PeakHeapSys      uint64
 	MaxObservedDepth int
 }
 
@@ -140,13 +144,15 @@ type HTTPCall struct {
 	ParseTime     time.Duration
 	TotalTime     time.Duration
 	Compressed    bool
-	ResponseBytes int
+	NetBytes      int
+	RawBytes      int
 	Note          string
 }
 
 type queueItem struct {
-	URL   string
-	Depth int
+	URL    string
+	Depth  int
+	Parent string
 }
 
 type robotsDiscovery struct {
@@ -160,7 +166,19 @@ type fetchResult struct {
 	ContentType   string
 	HeadersTime   time.Duration
 	ReadTime      time.Duration
-	ResponseBytes int
+	NetBytes      int
+	RawBytes      int
+}
+
+type countingReader struct {
+	io.Reader
+	N int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	c.N += n
+	return n, err
 }
 
 type parsedSitemap struct {
@@ -171,13 +189,14 @@ type parsedSitemap struct {
 }
 
 func Run(ctx context.Context, cfg Config) (*Result, error) {
+	startedAt := time.Now()
 	baseSite, err := normalizeBaseSite(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	if cfg.MaxDepth < 1 || cfg.MaxFiles < 1 || cfg.MaxURLs < 0 {
-		return nil, fmt.Errorf("max-depth and max-files must be positive, max-urls must be non-negative")
+	if cfg.MaxDepth < 0 || cfg.MaxFiles < 0 || cfg.MaxURLs < 0 {
+		return nil, fmt.Errorf("max-depth, max-files, and max-urls must be non-negative")
 	}
 
 	client := cfg.HTTPClient
@@ -185,9 +204,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		client = httpx.NewClient(cfg.Timeout, cfg.HTTP)
 	}
 	result := &Result{Config: cfg}
+	defer func() {
+		result.Elapsed = time.Since(startedAt)
+		result.updateRuntimeStats()
+	}()
 	client = withTraceRedirects(client, result)
 	result.TargetSource = targetSource(cfg)
 	result.EffectiveBaseURL = baseSite
+	result.updateRuntimeStats()
 
 	result.addTrace("input hostname=%q url=%q entrypoint=%q timeout=%s strict=%t fallback=%t", cfg.Hostname, cfg.URL, cfg.Entrypoint, cfg.Timeout, cfg.Strict, cfg.FallbackProbe)
 	if cfg.HTTP.InsecureSkipVerify {
@@ -210,6 +234,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	visited := map[string]bool{}
 	queued := map[string]bool{}
+	parents := map[string]string{}
 	queue := make([]queueItem, 0, len(entrypoints))
 	for _, ep := range entrypoints {
 		if queued[ep] {
@@ -217,6 +242,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		queue = append(queue, queueItem{URL: ep, Depth: 0})
 		queued[ep] = true
+		parents[ep] = ""
 	}
 
 	for len(queue) > 0 {
@@ -236,12 +262,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		visited[item.URL] = true
 
-		if len(result.Documents) >= cfg.MaxFiles {
+		if cfg.MaxFiles > 0 && len(result.Documents) >= cfg.MaxFiles {
 			result.addRule("FAIL", "limit.max_files", item.URL, fmt.Sprintf("reached max sitemap files limit %d", cfg.MaxFiles))
 			result.addProblem(makeProblem(cfg, "max_files_exceeded", item.URL, fmt.Sprintf("reached max sitemap files limit %d", cfg.MaxFiles)))
 			break
 		}
-		if item.Depth > cfg.MaxDepth {
+		if cfg.MaxDepth > 0 && item.Depth > cfg.MaxDepth {
 			result.addRule("FAIL", "limit.max_depth", item.URL, fmt.Sprintf("sitemap depth exceeds limit %d", cfg.MaxDepth))
 			result.addProblem(makeProblem(cfg, "max_depth_exceeded", item.URL, fmt.Sprintf("sitemap depth exceeds limit %d", cfg.MaxDepth)))
 			continue
@@ -254,6 +280,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if item.Depth > result.MaxObservedDepth {
 			result.MaxObservedDepth = item.Depth
 		}
+		result.updateRuntimeStats()
 
 		if cfg.MaxURLs > 0 && result.TotalURLs > cfg.MaxURLs {
 			result.addRule("FAIL", "limit.max_urls", item.URL, fmt.Sprintf("parsed URL count exceeds limit %d", cfg.MaxURLs))
@@ -262,13 +289,19 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 
 		for _, child := range children {
+			if createsCycle(item.URL, child, parents) {
+				result.addProblem(makeProblem(cfg, "cycle_detected", child, fmt.Sprintf("child sitemap %q points back into the current sitemap chain", child)))
+				result.addRule("WARN", "tree.cycle", child, "cyclic sitemap reference detected")
+				continue
+			}
 			if queued[child] || visited[child] {
 				result.addProblem(makeProblem(cfg, "duplicate_child", child, ""))
 				result.addRule("WARN", "tree.duplicate_child", child, "duplicate child sitemap reference")
 				continue
 			}
-			queue = append(queue, queueItem{URL: child, Depth: item.Depth + 1})
+			queue = append(queue, queueItem{URL: child, Depth: item.Depth + 1, Parent: item.URL})
 			queued[child] = true
+			parents[child] = item.URL
 		}
 	}
 
@@ -402,14 +435,39 @@ func probeURL(ctx context.Context, client *http.Client, cfg Config, rawURL strin
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusMethodNotAllowed || res.StatusCode == http.StatusNotImplemented {
-		res, err = fetchHTTP(ctx, client, cfg, rawURL, http.MethodGet, result, "fallback probe retry after HEAD rejected")
-		if err != nil {
-			return false, err
-		}
-		defer res.Body.Close()
-		return res.StatusCode == http.StatusOK, nil
+		return probeURLByContent(ctx, client, cfg, rawURL, result, "fallback probe retry after HEAD rejected")
 	}
-	return res.StatusCode == http.StatusOK, nil
+	if res.StatusCode != http.StatusOK {
+		return false, nil
+	}
+	return probeURLByContent(ctx, client, cfg, rawURL, result, "fallback probe content validation")
+}
+
+func probeURLByContent(ctx context.Context, client *http.Client, cfg Config, rawURL string, result *Result, note string) (bool, error) {
+	res, err := fetchHTTP(ctx, client, cfg, rawURL, http.MethodGet, result, note)
+	if err != nil {
+		return false, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return false, nil
+	}
+
+	body, compressed, readTime, netBytes, rawBytes, err := decodeBody(rawURL, res)
+	if err != nil {
+		if result != nil {
+			result.attachHTTPError(rawURL, http.MethodGet, fmt.Sprintf("read error: %v", err), readTime, netBytes, rawBytes)
+		}
+		return false, err
+	}
+	if result != nil {
+		result.attachHTTPRead(rawURL, http.MethodGet, readTime, netBytes, rawBytes, compressed)
+	}
+	parsed, _ := parseSitemapDocument(cfg, rawURL, body)
+	if parsed.Kind == "unknown" {
+		return false, nil
+	}
+	return true, nil
 }
 
 func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseSite string, item queueItem, result *Result) (DocumentResult, []Problem, []string, int) {
@@ -421,12 +479,17 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 	if err != nil {
 		code := "fetch_failed"
 		message := err.Error()
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		ruleName := "document.fetch"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = "check_timeout"
+			message = fmt.Sprintf("check timeout after %s while fetching sitemap document", cfg.Timeout)
+			ruleName = "check.timeout"
+		} else if errors.Is(err, context.DeadlineExceeded) {
 			code = "fetch_timeout"
 			message = fmt.Sprintf("request timeout after %s", cfg.Timeout)
 		}
 		problems = append(problems, makeProblem(cfg, code, item.URL, message))
-		result.addRule("FAIL", "document.fetch", item.URL, message)
+		result.addRule("FAIL", ruleName, item.URL, message)
 		return doc, problems, nil, 0
 	}
 
@@ -448,7 +511,9 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 	doc.Kind = parsed.Kind
 	doc.Entries = parsed.URLCount
 	doc.Children = len(parsed.Children)
-	result.attachDocumentTiming(item.URL, res.HeadersTime, res.ReadTime, parseDuration, res.HeadersTime+res.ReadTime+parseDuration, res.Compressed, res.ResponseBytes)
+	result.attachDocumentTiming(item.URL, res.HeadersTime, res.ReadTime, parseDuration, res.HeadersTime+res.ReadTime+parseDuration, res.Compressed, res.NetBytes, res.RawBytes)
+	result.TotalNetBytes += res.NetBytes
+	result.TotalRawBytes += res.RawBytes
 	if message, ok := unexpectedContentTypeMessage(res.ContentType, doc.Kind); ok {
 		problems = append(problems, makeProblem(cfg, "content_type_unexpected", item.URL, message))
 		result.addRule("WARN", "document.content_type", item.URL, message)
@@ -481,9 +546,19 @@ func fetch(ctx context.Context, client *http.Client, cfg Config, rawURL string, 
 	}
 	defer res.Body.Close()
 
-	body, compressed, readTime, responseBytes, err := decodeBody(rawURL, res)
+	body, compressed, readTime, netBytes, rawBytes, err := decodeBody(rawURL, res)
 	if err != nil {
+		if result != nil {
+			note := fmt.Sprintf("read error: %v", err)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				note = fmt.Sprintf("check timeout during body read: %v", err)
+			}
+			result.attachHTTPError(rawURL, http.MethodGet, note, readTime, netBytes, rawBytes)
+		}
 		return nil, err
+	}
+	if result != nil {
+		result.attachHTTPRead(rawURL, http.MethodGet, readTime, netBytes, rawBytes, compressed)
 	}
 	return &fetchResult{
 		StatusCode:    res.StatusCode,
@@ -492,7 +567,8 @@ func fetch(ctx context.Context, client *http.Client, cfg Config, rawURL string, 
 		ContentType:   res.Header.Get("Content-Type"),
 		HeadersTime:   lastHTTPCallHeadersTime(result, rawURL, http.MethodGet),
 		ReadTime:      readTime,
-		ResponseBytes: responseBytes,
+		NetBytes:      netBytes,
+		RawBytes:      rawBytes,
 	}, nil
 }
 
@@ -508,7 +584,11 @@ func fetchHTTP(ctx context.Context, client *http.Client, cfg Config, rawURL stri
 	headersTime := time.Since(start)
 	if err != nil {
 		if result != nil {
-			result.HTTPTrace = append(result.HTTPTrace, HTTPCall{Method: method, URL: rawURL, HeadersTime: headersTime, StatusCode: 0, Note: fmt.Sprintf("error: %v", err)})
+			note := fmt.Sprintf("error: %v", err)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				note = fmt.Sprintf("check timeout: %v", err)
+			}
+			result.HTTPTrace = append(result.HTTPTrace, HTTPCall{Method: method, URL: rawURL, HeadersTime: headersTime, StatusCode: 0, Note: note})
 		}
 		return nil, err
 	}
@@ -529,15 +609,16 @@ func fetchHTTP(ctx context.Context, client *http.Client, cfg Config, rawURL stri
 	return res, nil
 }
 
-func decodeBody(rawURL string, res *http.Response) ([]byte, bool, time.Duration, int, error) {
-	var reader io.Reader = res.Body
+func decodeBody(rawURL string, res *http.Response) ([]byte, bool, time.Duration, int, int, error) {
+	counter := &countingReader{Reader: res.Body}
+	var reader io.Reader = counter
 	compressed := false
 
 	contentEncoding := strings.ToLower(strings.TrimSpace(res.Header.Get("Content-Encoding")))
 	if strings.Contains(contentEncoding, "gzip") || strings.HasSuffix(strings.ToLower(rawURL), ".gz") {
-		gzr, err := gzip.NewReader(res.Body)
+		gzr, err := gzip.NewReader(counter)
 		if err != nil {
-			return nil, false, 0, 0, fmt.Errorf("gzip decode failed: %w", err)
+			return nil, false, 0, counter.N, 0, fmt.Errorf("gzip decode failed: %w", err)
 		}
 		defer gzr.Close()
 		reader = gzr
@@ -549,12 +630,12 @@ func decodeBody(rawURL string, res *http.Response) ([]byte, bool, time.Duration,
 	body, err := io.ReadAll(limited)
 	readTime := time.Since(start)
 	if err != nil {
-		return nil, compressed, readTime, 0, err
+		return nil, compressed, readTime, counter.N, len(body), err
 	}
 	if len(body) > maxSitemapFileBytes {
-		return nil, compressed, readTime, len(body), fmt.Errorf("uncompressed sitemap exceeds %d bytes", maxSitemapFileBytes)
+		return nil, compressed, readTime, counter.N, len(body), fmt.Errorf("uncompressed sitemap exceeds %d bytes", maxSitemapFileBytes)
 	}
-	return body, compressed, readTime, len(body), nil
+	return body, compressed, readTime, counter.N, len(body), nil
 }
 
 func parseSitemapDocument(cfg Config, sourceURL string, body []byte) (parsedSitemap, []Problem) {
@@ -727,6 +808,9 @@ func severityFromStrict(strict bool) Severity {
 }
 
 func (r *Result) ExitCode() int {
+	if r.hasTraversalLimitProblem() {
+		return ExitUnknown
+	}
 	switch r.maxSeverity() {
 	case SeverityCritical:
 		return ExitCritical
@@ -738,38 +822,54 @@ func (r *Result) ExitCode() int {
 }
 
 func (r *Result) Summary() string {
-	label := "OK"
-	switch r.maxSeverity() {
-	case SeverityWarning:
-		label = "WARNING"
-	case SeverityCritical:
-		label = "CRITICAL"
-	}
+	label := statusLabel(r.ExitCode())
 
 	if len(r.Problems) > 0 {
 		primary := r.primaryProblem()
-		return fmt.Sprintf("%s - %s (%s) | sitemap_files=%d urls=%d depth=%d warnings=%d criticals=%d ignored=%d",
+		if r.hasReliableStats() {
+			return fmt.Sprintf("%s - %s (%s) | sitemap_files=%d urls=%d depth=%d warnings=%d criticals=%d ignored=%d bytes_net=%d bytes_raw=%d elapsed_ms=%d heap_alloc_peak=%d heap_sys_peak=%d",
+				label,
+				primary.Message,
+				primary.URL,
+				len(r.Documents),
+				r.TotalURLs,
+				r.MaxObservedDepth,
+				r.countProblems(SeverityWarning),
+				r.countProblems(SeverityCritical),
+				len(r.IgnoredProblems),
+				r.TotalNetBytes,
+				r.TotalRawBytes,
+				r.Elapsed.Milliseconds(),
+				r.PeakHeapAlloc,
+				r.PeakHeapSys,
+			)
+		}
+		return fmt.Sprintf("%s - %s (%s) | warnings=%d criticals=%d ignored=%d partial=1 bytes_net=%d bytes_raw=%d elapsed_ms=%d heap_alloc_peak=%d heap_sys_peak=%d",
 			label,
 			primary.Message,
 			primary.URL,
-			len(r.Documents),
-			r.TotalURLs,
-			r.MaxObservedDepth,
 			r.countProblems(SeverityWarning),
 			r.countProblems(SeverityCritical),
 			len(r.IgnoredProblems),
+			r.TotalNetBytes,
+			r.TotalRawBytes,
+			r.Elapsed.Milliseconds(),
+			r.PeakHeapAlloc,
+			r.PeakHeapSys,
 		)
 	}
 
 	if r.Config.Verbosity > 0 {
-		return fmt.Sprintf("%s - discovery=%s entrypoints=%d sitemap_files=%d urls=%d depth=%d | sitemap_files=%d urls=%d depth=%d warnings=0 criticals=0 ignored=%d",
+		return fmt.Sprintf("%s - discovery=%s entrypoints=%d sitemap_files=%d urls=%d depth=%d bytes_net=%d bytes_raw=%d | sitemap_files=%d urls=%d depth=%d warnings=0 criticals=0 ignored=%d bytes_net=%d bytes_raw=%d elapsed_ms=%d heap_alloc_peak=%d heap_sys_peak=%d",
 			label, r.DiscoveredVia, len(r.Entrypoints), len(r.Documents), r.TotalURLs, r.MaxObservedDepth,
-			len(r.Documents), r.TotalURLs, r.MaxObservedDepth, len(r.IgnoredProblems))
+			r.TotalNetBytes, r.TotalRawBytes,
+			len(r.Documents), r.TotalURLs, r.MaxObservedDepth, len(r.IgnoredProblems), r.TotalNetBytes, r.TotalRawBytes, r.Elapsed.Milliseconds(), r.PeakHeapAlloc, r.PeakHeapSys)
 	}
 
-	return fmt.Sprintf("%s - %d sitemap files, %d URLs, depth %d | sitemap_files=%d urls=%d depth=%d warnings=0 criticals=0 ignored=%d",
+	return fmt.Sprintf("%s - %d sitemap files, %d URLs, depth %d, net %d B, raw %d B | sitemap_files=%d urls=%d depth=%d warnings=0 criticals=0 ignored=%d bytes_net=%d bytes_raw=%d elapsed_ms=%d heap_alloc_peak=%d heap_sys_peak=%d",
 		label, len(r.Documents), r.TotalURLs, r.MaxObservedDepth,
-		len(r.Documents), r.TotalURLs, r.MaxObservedDepth, len(r.IgnoredProblems))
+		r.TotalNetBytes, r.TotalRawBytes,
+		len(r.Documents), r.TotalURLs, r.MaxObservedDepth, len(r.IgnoredProblems), r.TotalNetBytes, r.TotalRawBytes, r.Elapsed.Milliseconds(), r.PeakHeapAlloc, r.PeakHeapSys)
 }
 
 func (r *Result) Detail() string {
@@ -816,13 +916,18 @@ func (r *Result) Detail() string {
 				target = fmt.Sprintf("%s -> %s", call.URL, call.FinalURL)
 			}
 			if call.Note != "" {
-				fmt.Fprintf(&b, "  - %s %d headers=%s read=%s parse=%s total=%s bytes=%d gzip=%t %s (%s)\n",
-					call.Method, call.StatusCode, call.HeadersTime, call.ReadTime, call.ParseTime, call.TotalTime, call.ResponseBytes, call.Compressed, target, call.Note)
+				fmt.Fprintf(&b, "  - %s %d headers=%s read=%s parse=%s total=%s net_bytes=%d raw_bytes=%d gzip=%t %s (%s)\n",
+					call.Method, call.StatusCode, call.HeadersTime, call.ReadTime, call.ParseTime, call.TotalTime, call.NetBytes, call.RawBytes, call.Compressed, target, call.Note)
 				continue
 			}
-			fmt.Fprintf(&b, "  - %s %d headers=%s read=%s parse=%s total=%s bytes=%d gzip=%t %s\n",
-				call.Method, call.StatusCode, call.HeadersTime, call.ReadTime, call.ParseTime, call.TotalTime, call.ResponseBytes, call.Compressed, target)
+			fmt.Fprintf(&b, "  - %s %d headers=%s read=%s parse=%s total=%s net_bytes=%d raw_bytes=%d gzip=%t %s\n",
+				call.Method, call.StatusCode, call.HeadersTime, call.ReadTime, call.ParseTime, call.TotalTime, call.NetBytes, call.RawBytes, call.Compressed, target)
 		}
+	}
+	if r.Config.Verbosity > 0 {
+		b.WriteString("Performance:\n")
+		fmt.Fprintf(&b, "  - elapsed=%s net_bytes=%d raw_bytes=%d heap_alloc_peak=%d heap_sys_peak=%d\n",
+			r.Elapsed, r.TotalNetBytes, r.TotalRawBytes, r.PeakHeapAlloc, r.PeakHeapSys)
 	}
 	if len(r.Problems) > 0 {
 		b.WriteString("Problems:\n")
@@ -881,7 +986,7 @@ func CatalogSlugs() []string {
 	return finding.CatalogSlugs()
 }
 
-func (r *Result) attachDocumentTiming(rawURL string, headersTime, readTime, parseTime, totalTime time.Duration, compressed bool, responseBytes int) {
+func (r *Result) attachDocumentTiming(rawURL string, headersTime, readTime, parseTime, totalTime time.Duration, compressed bool, netBytes, rawBytes int) {
 	for i := len(r.HTTPTrace) - 1; i >= 0; i-- {
 		call := &r.HTTPTrace[i]
 		if call.Method != http.MethodGet || call.URL != rawURL {
@@ -891,8 +996,50 @@ func (r *Result) attachDocumentTiming(rawURL string, headersTime, readTime, pars
 		call.ParseTime = parseTime
 		call.TotalTime = totalTime
 		call.Compressed = compressed
-		call.ResponseBytes = responseBytes
+		call.NetBytes = netBytes
+		call.RawBytes = rawBytes
 		return
+	}
+}
+
+func (r *Result) attachHTTPRead(rawURL, method string, readTime time.Duration, netBytes, rawBytes int, compressed bool) {
+	for i := len(r.HTTPTrace) - 1; i >= 0; i-- {
+		call := &r.HTTPTrace[i]
+		if call.Method != method || call.URL != rawURL {
+			continue
+		}
+		call.ReadTime = readTime
+		call.TotalTime = call.HeadersTime + readTime
+		call.Compressed = compressed
+		call.NetBytes = netBytes
+		call.RawBytes = rawBytes
+		return
+	}
+}
+
+func (r *Result) attachHTTPError(rawURL, method, note string, readTime time.Duration, netBytes, rawBytes int) {
+	for i := len(r.HTTPTrace) - 1; i >= 0; i-- {
+		call := &r.HTTPTrace[i]
+		if call.Method != method || call.URL != rawURL {
+			continue
+		}
+		call.Note = note
+		call.ReadTime = readTime
+		call.NetBytes = netBytes
+		call.RawBytes = rawBytes
+		call.TotalTime = call.HeadersTime + readTime
+		return
+	}
+}
+
+func (r *Result) updateRuntimeStats() {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if ms.HeapAlloc > r.PeakHeapAlloc {
+		r.PeakHeapAlloc = ms.HeapAlloc
+	}
+	if ms.HeapSys > r.PeakHeapSys {
+		r.PeakHeapSys = ms.HeapSys
 	}
 }
 
@@ -904,6 +1051,19 @@ func (r *Result) maxSeverity() Severity {
 		}
 	}
 	return max
+}
+
+func statusLabel(exitCode int) string {
+	switch exitCode {
+	case ExitWarning:
+		return "WARNING"
+	case ExitCritical:
+		return "CRITICAL"
+	case ExitUnknown:
+		return "UNKNOWN"
+	default:
+		return "OK"
+	}
 }
 
 func (r *Result) primaryProblem() Problem {
@@ -941,6 +1101,46 @@ func (r *Result) countProblems(sev Severity) int {
 		}
 	}
 	return count
+}
+
+func (r *Result) hasReliableStats() bool {
+	for _, p := range r.Problems {
+		switch p.Code {
+		case "check_timeout",
+			"fetch_timeout",
+			"fetch_failed",
+			"bad_status",
+			"max_files_exceeded",
+			"max_depth_exceeded",
+			"max_urls_exceeded":
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Result) hasTraversalLimitProblem() bool {
+	for _, p := range r.Problems {
+		switch p.Code {
+		case "max_files_exceeded", "max_depth_exceeded", "max_urls_exceeded":
+			return true
+		}
+	}
+	return false
+}
+
+func createsCycle(parentURL, childURL string, parents map[string]string) bool {
+	if childURL == parentURL {
+		return true
+	}
+	current := parentURL
+	for current != "" {
+		if current == childURL {
+			return true
+		}
+		current = parents[current]
+	}
+	return false
 }
 
 func severityName(sev Severity) string { return finding.SeverityName(sev) }

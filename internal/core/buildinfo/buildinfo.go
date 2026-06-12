@@ -1,6 +1,9 @@
 package buildinfo
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 var (
 	Version = "dev"
@@ -21,4 +24,15 @@ func VersionOrDev() string {
 		return "dev"
 	}
 	return Version
+}
+
+func VersionForUserAgent() string {
+	v := VersionOrDev()
+	if v == "" || v == "dev" {
+		return "dev"
+	}
+	if strings.HasPrefix(v, "v") && len(v) > 1 && v[1] >= '0' && v[1] <= '9' {
+		return v
+	}
+	return "dev"
 }

@@ -2,15 +2,26 @@ package httpx
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
+)
+
+const (
+	DefaultUserAgentProduct = "HabrNagiosPlugins"
+	DefaultUserAgentURL     = "https://github.com/habralab/habr-nagios-plugins"
 )
 
 type Options struct {
 	InsecureSkipVerify bool
 	UserAgent          string
+}
+
+func DefaultUserAgent() string {
+	return fmt.Sprintf("%s/%s (+%s)", DefaultUserAgentProduct, buildinfo.VersionForUserAgent(), DefaultUserAgentURL)
 }
 
 func NewClient(timeout time.Duration, opts Options) *http.Client {
@@ -40,7 +51,7 @@ func HelpOptions() []clihelp.Option {
 			Long:        "--user-agent",
 			Description: "Override the HTTP User-Agent header sent to robots.txt and sitemap documents.",
 			Examples: []string{
-				`--user-agent "check_sitemap/0.1"`,
+				fmt.Sprintf(`--user-agent "%s"`, DefaultUserAgent()),
 			},
 		},
 	}

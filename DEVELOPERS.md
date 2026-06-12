@@ -146,6 +146,8 @@ Current direction:
 - shared HTTP/TLS-related help text should live near that module
 - probe apps should aggregate shared and probe-local flags into one help output
 - shared options should appear in a stable order in CLI help
+- the default HTTP `User-Agent` should identify the whole tool family, not a single probe binary
+- the default HTTP `User-Agent` should expose only a release tag or `dev`, not branch names or commit hashes
 
 ## Probe Identity And Naming
 
@@ -238,6 +240,15 @@ CLI design principles:
 - stable exit code mapping
 - compact primary output with optional deeper diagnostics
 
+Current sitemap probe conventions:
+
+- default overall timeout is `60s`
+- traversal guardrails such as `--max-files` and `--max-depth` are opt-in and default to `0` (disabled)
+- local traversal limits are checker-side constraints, not sitemap protocol violations
+- traversal-limit results should surface as incomplete checker outcomes rather than false protocol-invalid `CRITICAL` states
+- cyclic sitemap references should be reported as soft failures (`WARNING`) unless the standard explicitly requires harder treatment
+- fallback discovery should be confirmed by content validation, not only `HEAD 200`
+
 Concrete probe flags should be documented alongside each binary once they exist.
 
 If a probe uses shared HTTP/TLS options, the shared flag descriptions should stay attached to the shared module and be rendered into the final help text rather than duplicated manually across probe apps.
@@ -265,6 +276,13 @@ Build-size expectation:
 - production-facing binaries should default to stripped builds
 - debug symbols should be opt-in for local development
 - if a binary becomes unexpectedly large, inspect sections and symbols before guessing
+
+Performance expectation:
+
+- probes should expose enough metrics to reason about runtime cost in monitoring environments
+- current sitemap output includes elapsed time, transferred bytes, uncompressed bytes, and peak Go heap counters
+- external RSS and wall-clock measurements are still useful for validating behavior on real hosts
+- concurrency is intentionally out of scope for this repository unless a future need clearly outweighs the added operational and memory complexity
 
 ## Documentation Split
 

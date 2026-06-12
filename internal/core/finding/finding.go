@@ -27,9 +27,10 @@ type ProblemSpec struct {
 var Catalog = map[string]ProblemSpec{
 	"entrypoint_not_found":    {Slug: "entrypoint_not_found", DefaultSeverity: SeverityCritical, DefaultMessage: "no sitemap entrypoint discovered"},
 	"check_timeout":           {Slug: "check_timeout", DefaultSeverity: SeverityCritical, DefaultMessage: "check timeout"},
-	"max_files_exceeded":      {Slug: "max_files_exceeded", DefaultSeverity: SeverityCritical, DefaultMessage: "reached max sitemap files limit"},
-	"max_depth_exceeded":      {Slug: "max_depth_exceeded", DefaultSeverity: SeverityCritical, DefaultMessage: "sitemap depth exceeds limit"},
-	"max_urls_exceeded":       {Slug: "max_urls_exceeded", DefaultSeverity: SeverityCritical, DefaultMessage: "parsed URL count exceeds limit"},
+	"max_files_exceeded":      {Slug: "max_files_exceeded", DefaultSeverity: SeverityWarning, DefaultMessage: "reached max sitemap files limit"},
+	"max_depth_exceeded":      {Slug: "max_depth_exceeded", DefaultSeverity: SeverityWarning, DefaultMessage: "sitemap depth exceeds limit"},
+	"max_urls_exceeded":       {Slug: "max_urls_exceeded", DefaultSeverity: SeverityWarning, DefaultMessage: "parsed URL count exceeds limit"},
+	"cycle_detected":          {Slug: "cycle_detected", DefaultSeverity: SeverityWarning, DefaultMessage: "cyclic sitemap reference detected"},
 	"duplicate_child":         {Slug: "duplicate_child", DefaultSeverity: SeverityWarning, DefaultMessage: "duplicate child sitemap reference"},
 	"invalid_entrypoint":      {Slug: "invalid_entrypoint", DefaultSeverity: SeverityCritical, DefaultMessage: "invalid sitemap entrypoint"},
 	"robots_fetch_failed":     {Slug: "robots_fetch_failed", DefaultSeverity: SeverityWarning, DefaultMessage: "robots.txt fetch failed"},

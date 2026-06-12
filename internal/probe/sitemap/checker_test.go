@@ -84,6 +84,43 @@ func TestIgnoredFallbackWarningIsReportedSeparately(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotAcceptHTMLFallbackAsSitemap(t *testing.T) {
+	serverURL := "https://probe.test"
+
+	cfg := DefaultConfig()
+	cfg.URL = serverURL
+	cfg.Timeout = 2 * time.Second
+	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/robots.txt":
+			return stringResponse(req, http.StatusOK, "User-agent: *\nDisallow:\n"), nil
+		case "/sitemap.xml":
+			res := stringResponse(req, http.StatusOK, "<!DOCTYPE html><html><title>challenge</title></html>")
+			res.Header.Set("Content-Type", "text/html")
+			return res, nil
+		default:
+			return stringResponse(req, http.StatusNotFound, "not found"), nil
+		}
+	})
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := result.DiscoveredVia, "fallback"; got != want {
+		t.Fatalf("DiscoveredVia = %q, want %q", got, want)
+	}
+	if got := len(result.Entrypoints); got != 0 {
+		t.Fatalf("Entrypoints len = %d, want 0", got)
+	}
+	if got := result.ExitCode(); got != ExitCritical {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitCritical)
+	}
+	if got := result.Summary(); !strings.Contains(got, "no sitemap entrypoint discovered") {
+		t.Fatalf("Summary() = %q, want entrypoint_not_found", got)
+	}
+}
+
 func TestRunPrefersURLOverHostnameInDiscoveryTrace(t *testing.T) {
 	serverURL := "https://career.habr.test"
 
@@ -158,32 +195,45 @@ func TestRunRecordsHTTPRedirectTrace(t *testing.T) {
 	}
 }
 
-func TestRunReportsFetchTimeoutInSummaryAndDetail(t *testing.T) {
+func TestRunReportsCheckTimeoutInSummaryAndDetail(t *testing.T) {
 	serverURL := "https://probe.test"
 
 	cfg := DefaultConfig()
 	cfg.URL = serverURL
 	cfg.Entrypoint = serverURL + "/sitemap.xml"
-	cfg.Timeout = 1500 * time.Millisecond
-	cfg.Verbosity = 1
+	cfg.Timeout = 5 * time.Millisecond
+	cfg.Verbosity = 2
 	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
-		return nil, context.DeadlineExceeded
+		<-req.Context().Done()
+		return nil, req.Context().Err()
 	})
 
-	result, err := Run(context.Background(), cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	result, err := Run(ctx, cfg)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if got := result.Summary(); !strings.Contains(got, "request timeout after 1.5s") {
-		t.Fatalf("Summary() = %q, want timeout message", got)
+	if got := result.Summary(); !strings.Contains(got, "check timeout after 5ms while fetching sitemap document") {
+		t.Fatalf("Summary() = %q, want check timeout message", got)
+	}
+	if got := result.Summary(); strings.Contains(got, "sitemap_files=") || strings.Contains(got, "urls=") || strings.Contains(got, "depth=") {
+		t.Fatalf("Summary() = %q, want no final sitemap stats for partial timeout result", got)
+	}
+	if got := result.Summary(); !strings.Contains(got, "partial=1") {
+		t.Fatalf("Summary() = %q, want partial marker", got)
 	}
 	detail := result.Detail()
-	if !strings.Contains(detail, "FAIL document.fetch: request timeout after 1.5s") {
-		t.Fatalf("Detail() = %q, want fetch timeout rule", detail)
+	if !strings.Contains(detail, "FAIL check.timeout: check timeout after 5ms while fetching sitemap document") {
+		t.Fatalf("Detail() = %q, want check timeout rule", detail)
 	}
-	if !strings.Contains(detail, "CRITICAL fetch_timeout: request timeout after 1.5s") {
-		t.Fatalf("Detail() = %q, want fetch_timeout problem", detail)
+	if !strings.Contains(detail, "CRITICAL check_timeout: check timeout after 5ms while fetching sitemap document") {
+		t.Fatalf("Detail() = %q, want check_timeout problem", detail)
+	}
+	if !strings.Contains(detail, "check timeout: Get") {
+		t.Fatalf("Detail() = %q, want explicit check-timeout HTTP trace note", detail)
 	}
 }
 
@@ -226,7 +276,7 @@ func TestRunReportsBrokenXMLInSummaryAndDetail(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.URL = serverURL
 	cfg.Entrypoint = serverURL + "/sitemap.xml"
-	cfg.Verbosity = 1
+	cfg.Verbosity = 2
 	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
 		res := stringResponse(req, http.StatusOK, brokenXML)
 		res.Header.Set("Content-Type", "application/xml")
@@ -256,7 +306,7 @@ func TestRunWarnsOnUnexpectedContentType(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.URL = serverURL
 	cfg.Entrypoint = serverURL + "/sitemap.xml"
-	cfg.Verbosity = 1
+	cfg.Verbosity = 2
 	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
 		res := stringResponse(req, http.StatusOK, fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>%s/page</loc></url></urlset>`, serverURL))
 		res.Header.Set("Content-Type", "text/html; charset=utf-8")
@@ -274,12 +324,21 @@ func TestRunWarnsOnUnexpectedContentType(t *testing.T) {
 	if got := result.Summary(); !strings.Contains(got, `unexpected content type "text/html" for urlset sitemap`) {
 		t.Fatalf("Summary() = %q, want content type warning", got)
 	}
+	if got := result.Summary(); !strings.Contains(got, "sitemap_files=1") || !strings.Contains(got, "urls=1") || !strings.Contains(got, "depth=0") {
+		t.Fatalf("Summary() = %q, want trusted sitemap stats for complete warning result", got)
+	}
+	if got := result.Summary(); !strings.Contains(got, "bytes_net=") || !strings.Contains(got, "bytes_raw=") {
+		t.Fatalf("Summary() = %q, want byte counters", got)
+	}
 	detail := result.Detail()
 	if !strings.Contains(detail, `WARN document.content_type: unexpected content type "text/html" for urlset sitemap`) {
 		t.Fatalf("Detail() = %q, want content type rule", detail)
 	}
 	if !strings.Contains(detail, `WARNING content_type_unexpected: unexpected content type "text/html" for urlset sitemap`) {
 		t.Fatalf("Detail() = %q, want content type problem", detail)
+	}
+	if !strings.Contains(detail, "net_bytes=") || !strings.Contains(detail, "raw_bytes=") {
+		t.Fatalf("Detail() = %q, want HTTP byte counters", detail)
 	}
 }
 
@@ -457,6 +516,77 @@ func TestRunAllowCrossHostPermitsChildFetchAcrossHosts(t *testing.T) {
 	detail := result.Detail()
 	if strings.Contains(detail, "child_scope_invalid") {
 		t.Fatalf("Detail() = %q, want no child_scope_invalid problem", detail)
+	}
+}
+
+func TestRunReportsTraversalLimitAsUnknown(t *testing.T) {
+	serverURL := "https://probe.test"
+
+	cfg := DefaultConfig()
+	cfg.URL = serverURL
+	cfg.Entrypoint = serverURL + "/sitemap.xml"
+	cfg.MaxFiles = 1
+	cfg.Verbosity = 1
+	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "probe.test":
+			switch req.URL.Path {
+			case "/sitemap.xml":
+				return stringResponse(req, http.StatusOK, `<?xml version="1.0" encoding="UTF-8"?><sitemapindex><sitemap><loc>https://probe.test/child-1.xml</loc></sitemap><sitemap><loc>https://probe.test/child-2.xml</loc></sitemap></sitemapindex>`), nil
+			case "/child-1.xml":
+				return stringResponse(req, http.StatusOK, `<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>https://probe.test/page-1</loc></url></urlset>`), nil
+			case "/child-2.xml":
+				return stringResponse(req, http.StatusOK, `<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>https://probe.test/page-2</loc></url></urlset>`), nil
+			}
+		}
+		return stringResponse(req, http.StatusNotFound, "not found"), nil
+	})
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := result.ExitCode(); got != ExitUnknown {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitUnknown)
+	}
+	if got := result.Summary(); !strings.HasPrefix(got, "UNKNOWN - reached max sitemap files limit 1") {
+		t.Fatalf("Summary() = %q, want UNKNOWN traversal-limit summary", got)
+	}
+	if got := result.Summary(); !strings.Contains(got, "partial=1") {
+		t.Fatalf("Summary() = %q, want partial marker", got)
+	}
+}
+
+func TestRunWarnsOnCycleDetected(t *testing.T) {
+	serverURL := "https://probe.test"
+
+	cfg := DefaultConfig()
+	cfg.URL = serverURL
+	cfg.Entrypoint = serverURL + "/root.xml"
+	cfg.Verbosity = 1
+	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/root.xml":
+			return stringResponse(req, http.StatusOK, `<?xml version="1.0" encoding="UTF-8"?><sitemapindex><sitemap><loc>https://probe.test/child.xml</loc></sitemap></sitemapindex>`), nil
+		case "/child.xml":
+			return stringResponse(req, http.StatusOK, `<?xml version="1.0" encoding="UTF-8"?><sitemapindex><sitemap><loc>https://probe.test/root.xml</loc></sitemap></sitemapindex>`), nil
+		}
+		return stringResponse(req, http.StatusNotFound, "not found"), nil
+	})
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := result.ExitCode(); got != ExitWarning {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitWarning)
+	}
+	detail := result.Detail()
+	if !strings.Contains(detail, "WARN tree.cycle: cyclic sitemap reference detected") {
+		t.Fatalf("Detail() = %q, want cycle rule", detail)
+	}
+	if !strings.Contains(detail, "WARNING cycle_detected: child sitemap \"https://probe.test/root.xml\" points back into the current sitemap chain") {
+		t.Fatalf("Detail() = %q, want cycle problem", detail)
 	}
 }
 
