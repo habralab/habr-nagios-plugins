@@ -8,12 +8,15 @@ import (
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/robots"
 )
+
+var robotsRun = robots.Run
 
 func Run(programName string, args []string) int {
 	binName := probecli.EffectiveProgramName(programName, robots.Meta.DefaultBinaryName())
@@ -52,10 +55,20 @@ func Run(programName string, args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	result, err := robots.Run(ctx, cfg)
+	result, err := robotsRun(ctx, cfg)
 	if err != nil {
 		fmt.Printf("UNKNOWN - %v\n", err)
 		return robots.ExitUnknown
+	}
+
+	if cfg.OutputMode == checkreport.OutputJSON {
+		data, err := result.JSON()
+		if err != nil {
+			fmt.Printf("UNKNOWN - failed to encode JSON output: %v\n", err)
+			return robots.ExitUnknown
+		}
+		fmt.Println(string(data))
+		return result.ExitCode()
 	}
 
 	if cfg.Verbosity > 0 {
@@ -83,12 +96,14 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	var forbidDisallows string
 	var ignoreErrors string
 	var behaviorProfile string
+	var output string
 
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.URL, "u", "", "full base URL used for discovery, e.g. https://example.com")
 	fs.StringVar(&cfg.URL, "url", "", "full base URL used for discovery, e.g. https://example.com")
 	fs.StringVar(&cfg.RobotsURL, "robots-url", "", "explicit robots.txt URL")
+	fs.StringVar(&output, "output", "nagios", "output mode: nagios|json")
 	fs.BoolVar(&cfg.Strict, "strict", false, "enable stricter policy interpretation")
 	fs.StringVar(&behaviorProfile, "behavior-profile", string(robots.BehaviorProfileRFC), "documented crawler behavior profile: rfc, vendor-aware, strict")
 	fs.BoolVar(&cfg.RequireSitemap, "require-sitemap", false, "require at least one Sitemap directive")
@@ -121,6 +136,10 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	}
 	cfg.Timeout = d
 	cfg.Verbosity = verbosity.Clamp(baseVerbosity + verbosityFlag)
+	cfg.OutputMode, err = robots.ParseOutputMode(output)
+	if err != nil {
+		return robots.Config{}, err
+	}
 	cfg.BehaviorProfile, err = parseBehaviorProfile(behaviorProfile)
 	if err != nil {
 		return robots.Config{}, err
@@ -166,6 +185,17 @@ func printHelp(binName string) {
 			Examples: []string{
 				"--robots-url https://example.com/robots.txt",
 				"--robots-url https://cdn.example.net/static/robots.txt",
+			},
+		},
+		{
+			Long: "--output",
+			Description: "Output mode.\n" +
+				"nagios emits classic monitoring text.\n" +
+				"json emits the structured robots waterfall report for external renderers.\n" +
+				"Default: nagios.",
+			Examples: []string{
+				"--output nagios",
+				"--output json",
 			},
 		},
 		{

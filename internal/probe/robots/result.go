@@ -4,170 +4,190 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 func (r *Result) ExitCode() int {
-	switch r.maxSeverity() {
-	case SeverityCritical:
-		return ExitCritical
-	case SeverityWarning:
-		return ExitWarning
-	default:
-		return ExitOK
-	}
+	return r.reportView().ExitCode()
 }
 
 func (r *Result) Summary() string {
-	label := statusLabel(r.ExitCode())
-	if r.Absent {
-		return fmt.Sprintf("%s - robots.txt not present (HTTP %d) | groups=0 sitemaps=0 rules=0 warnings=%d criticals=%d ignored=%d bytes=%d elapsed_ms=%d",
-			label,
-			r.StatusCode,
-			r.countProblems(SeverityWarning),
-			r.countProblems(SeverityCritical),
-			len(r.IgnoredProblems),
-			r.Perf.Bytes,
-			r.Perf.Elapsed.Milliseconds(),
-		)
+	report := r.reportView()
+	var perfParts []string
+	for _, metric := range report.Metrics {
+		perfParts = append(perfParts, fmt.Sprintf("%s=%s", metric.Name, metric.DisplayValue()))
 	}
-	if len(r.Problems) > 0 {
-		primary := r.primaryProblem()
-		return fmt.Sprintf("%s - %s (%s) | groups=%d sitemaps=%d rules=%d warnings=%d criticals=%d ignored=%d bytes=%d elapsed_ms=%d",
-			label,
-			primary.Message,
-			primary.URL,
-			len(r.Groups),
-			len(r.Sitemaps),
-			r.ruleCount(),
-			r.countProblems(SeverityWarning),
-			r.countProblems(SeverityCritical),
-			len(r.IgnoredProblems),
-			r.Perf.Bytes,
-			r.Perf.Elapsed.Milliseconds(),
-		)
-	}
-	return fmt.Sprintf("%s - %d groups, %d sitemaps, %d rules, %d B | groups=%d sitemaps=%d rules=%d warnings=%d criticals=%d ignored=%d bytes=%d elapsed_ms=%d",
-		label,
-		len(r.Groups),
-		len(r.Sitemaps),
-		r.ruleCount(),
-		r.Perf.Bytes,
-		len(r.Groups),
-		len(r.Sitemaps),
-		r.ruleCount(),
-		r.countProblems(SeverityWarning),
-		r.countProblems(SeverityCritical),
-		len(r.IgnoredProblems),
-		r.Perf.Bytes,
-		r.Perf.Elapsed.Milliseconds(),
+	perfParts = append(perfParts, fmt.Sprintf("elapsed_ms=%d", report.DurationMS))
+
+	return fmt.Sprintf("%s - %s (%s) | %s",
+		report.NagiosLabel(),
+		report.Summary,
+		report.EffectiveTarget(),
+		strings.Join(perfParts, " "),
 	)
 }
 
 func (r *Result) Detail() string {
+	report := r.reportView()
 	var b strings.Builder
+
 	b.WriteString(r.Summary())
 	b.WriteByte('\n')
-	r.writeTargetSection(&b)
-	if len(r.HTTPTrace) > 0 {
-		r.writeHTTPSection(&b)
+	writeTargetSection(&b, report)
+	if len(report.Traces) > 0 {
+		writeHTTPSection(&b, report)
 	}
-	r.writeParsedSection(&b)
-	if len(r.Rules) > 0 {
-		r.writeRulesSection(&b)
+	writeParsedSection(&b, report)
+	ruleChecks := legacyRuleChecks(report.Stages)
+	if len(ruleChecks) > 0 {
+		writeRulesSection(&b, ruleChecks)
 	}
-	if len(r.Problems) > 0 {
-		r.writeProblemsSection(&b)
+	if len(report.Findings) > 0 {
+		writeFindingsSection(&b, "Problems", report.Findings)
 	}
-	if len(r.IgnoredProblems) > 0 {
-		r.writeIgnoredProblemsSection(&b)
+	if len(report.SuppressedFindings) > 0 {
+		writeFindingsSection(&b, "Ignored Problems", report.SuppressedFindings)
 	}
 	return b.String()
 }
 
-func (r *Result) writeTargetSection(b *strings.Builder) {
+func (r *Result) JSON() ([]byte, error) {
+	return r.reportView().JSON()
+}
+
+func ParseOutputMode(raw string) (checkreport.OutputMode, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", string(checkreport.OutputNagios):
+		return checkreport.OutputNagios, nil
+	case string(checkreport.OutputJSON):
+		return checkreport.OutputJSON, nil
+	default:
+		return "", fmt.Errorf("invalid --output %q, expected nagios or json", raw)
+	}
+}
+
+func writeTargetSection(b *strings.Builder, report *checkreport.Report) {
 	b.WriteString("Target:\n")
-	fmt.Fprintf(b, "  - source=%s effective_base=%s requested=%s final=%s status=%d\n",
-		r.TargetSource,
-		emptyAsDash(r.EffectiveBaseURL),
-		emptyAsDash(r.EffectiveRobotsURL),
-		emptyAsDash(r.FinalURL),
-		r.StatusCode,
+	fmt.Fprintf(b, "  - source=%s effective_base=%s requested=%s final=%s status=%s\n",
+		reportTargetValue(report, "source"),
+		reportTargetValue(report, "effective_base"),
+		reportTargetValue(report, "requested"),
+		reportTargetValue(report, "final"),
+		reportMetaValue(report.Meta, "status_code"),
 	)
 }
 
-func (r *Result) writeHTTPSection(b *strings.Builder) {
+func writeHTTPSection(b *strings.Builder, report *checkreport.Report) {
 	b.WriteString("HTTP:\n")
-	for _, call := range r.HTTPTrace {
-		target := call.URL
-		if call.FinalURL != "" && call.FinalURL != call.URL {
-			target = fmt.Sprintf("%s -> %s", call.URL, call.FinalURL)
-		}
-		if call.Note != "" {
-			fmt.Fprintf(b, "  - %s %d headers=%s read=%s total=%s bytes=%d %s (%s)\n",
-				call.Method, call.StatusCode, call.HeadersTime, call.ReadTime, call.TotalTime, call.Bytes, target, call.Note)
+	for _, trace := range report.Traces {
+		if trace.Kind != "http" {
 			continue
 		}
-		fmt.Fprintf(b, "  - %s %d headers=%s read=%s total=%s bytes=%d %s\n",
-			call.Method, call.StatusCode, call.HeadersTime, call.ReadTime, call.TotalTime, call.Bytes, target)
+		fmt.Fprintf(b, "  - %s\n", trace.Message)
 	}
 }
 
-func (r *Result) writeParsedSection(b *strings.Builder) {
-	b.WriteString("Parsed:\n")
-	if r.Absent {
-		fmt.Fprintf(b, "  - robots.txt not present, no directives parsed\n")
+func writeParsedSection(b *strings.Builder, report *checkreport.Report) {
+	stage := reportStage(report, "parse")
+	if stage == nil {
 		return
 	}
-	fmt.Fprintf(b, "  - encoding=%s lines=%d groups=%d sitemaps=%d rules=%d\n", r.Encoding, r.RawLines, len(r.Groups), len(r.Sitemaps), r.ruleCount())
-	for i, group := range r.Groups {
-		fmt.Fprintf(b, "  - group=%d user_agents=%s allow=%d disallow=%d extensions=%d\n", i+1, strings.Join(group.UserAgents, ","), len(group.Allows), len(group.Disallows), len(group.Extensions))
-		for _, ext := range group.Extensions {
-			fmt.Fprintf(b, "    extension=%s value=%q scope=%s provenance=%s ref=%s ref_url=%s\n", ext.Name, ext.Value, ext.Spec.Scope, ext.Spec.Provenance, ext.Spec.Reference, emptyAsDash(ext.Spec.ReferenceURL))
-		}
-	}
-	for _, sitemap := range r.Sitemaps {
-		fmt.Fprintf(b, "  - sitemap=%s\n", sitemap)
-	}
-	for _, ext := range r.Extensions {
-		fmt.Fprintf(b, "  - extension=%s value=%q scope=%s provenance=%s ref=%s ref_url=%s\n", ext.Name, ext.Value, ext.Spec.Scope, ext.Spec.Provenance, ext.Spec.Reference, emptyAsDash(ext.Spec.ReferenceURL))
-	}
-	for _, agent := range r.KnownAgents {
-		fmt.Fprintf(b, "  - known_agent=%s vendor=%s kind=%s provenance=%s groups=%s count=%d ref=%s ref_url=%s\n", agent.Token, agent.Spec.Vendor, agent.Spec.Kind, agent.Spec.Provenance, strings.Join(agent.GroupNames, ","), agent.Count, agent.Spec.Reference, emptyAsDash(agent.Spec.ReferenceURL))
-		if behavior, ok := lookupAgentBehavior(agent.Token); ok {
-			for _, claim := range behavior.Claims {
-				fmt.Fprintf(b, "    behavior category=%s subject=%q disposition=%s value=%s ref=%s ref_url=%s\n",
-					claim.Category,
-					claim.Subject,
-					claim.Disposition,
-					emptyAsDash(claim.Value),
-					claim.Reference,
-					emptyAsDash(claim.ReferenceURL),
-				)
+	b.WriteString("Parsed:\n")
+	for _, check := range stage.Checks {
+		switch check.ID {
+		case "parsed.absent":
+			fmt.Fprintf(b, "  - %s\n", check.Message)
+		case "parsed.summary":
+			fmt.Fprintf(b, "  - %s\n", check.Message)
+		case "parsed.group":
+			fmt.Fprintf(b, "  - %s %s\n", strings.Replace(check.Subject, "group ", "group=", 1), check.Message)
+			for _, ev := range check.Evidence {
+				fmt.Fprintf(b, "    %s\n", ev.Summary)
+			}
+		case "parsed.sitemap":
+			fmt.Fprintf(b, "  - %s\n", check.Message)
+		case "parsed.extension":
+			fmt.Fprintf(b, "  - %s\n", check.Message)
+			for _, ev := range check.Evidence {
+				fmt.Fprintf(b, "    %s\n", ev.Summary)
+			}
+		case "parsed.known_agent":
+			fmt.Fprintf(b, "  - %s\n", check.Message)
+			for _, ev := range check.Evidence {
+				fmt.Fprintf(b, "    %s\n", ev.Summary)
 			}
 		}
 	}
 }
 
-func (r *Result) writeRulesSection(b *strings.Builder) {
+func writeRulesSection(b *strings.Builder, checks []checkreport.Check) {
 	b.WriteString("Rules:\n")
-	for _, rule := range r.Rules {
-		fmt.Fprintf(b, "  - %s %s: %s [%s]\n", rule.Status, rule.Name, rule.Detail, rule.Target)
+	for _, check := range checks {
+		fmt.Fprintf(b, "  - %s %s: %s [%s]\n",
+			legacyRuleStatus(check),
+			check.ID,
+			check.Message,
+			emptyAsDash(check.Subject),
+		)
 	}
 }
 
-func (r *Result) writeProblemsSection(b *strings.Builder) {
-	b.WriteString("Problems:\n")
-	for _, p := range r.Problems {
-		fmt.Fprintf(b, "  - %s %s: %s [%s]\n", severityName(p.Severity), p.Code, p.Message, p.URL)
+func writeFindingsSection(b *strings.Builder, title string, findings []checkreport.Finding) {
+	b.WriteString(title)
+	b.WriteString(":\n")
+	for _, finding := range findings {
+		prefix := strings.ToUpper(string(finding.Severity))
+		if title == "Ignored Problems" {
+			prefix = "IGNORED " + finding.Code + " original=" + strings.ToUpper(string(finding.Severity))
+			fmt.Fprintf(b, "  - %s: %s [%s]\n", prefix, finding.Message, emptyAsDash(finding.Target))
+			continue
+		}
+		fmt.Fprintf(b, "  - %s %s: %s [%s]\n", prefix, finding.Code, finding.Message, emptyAsDash(finding.Target))
 	}
 }
 
-func (r *Result) writeIgnoredProblemsSection(b *strings.Builder) {
-	b.WriteString("Ignored Problems:\n")
-	for _, p := range r.IgnoredProblems {
-		fmt.Fprintf(b, "  - IGNORED %s original=%s: %s [%s]\n", p.Code, severityName(p.Severity), p.Message, p.URL)
+func reportStage(report *checkreport.Report, id string) *checkreport.Stage {
+	for i := range report.Stages {
+		if report.Stages[i].ID == id {
+			return &report.Stages[i]
+		}
+	}
+	return nil
+}
+
+func reportTargetValue(report *checkreport.Report, role string) string {
+	for _, target := range report.Targets {
+		if target.Role == role {
+			return target.Value
+		}
+	}
+	return "-"
+}
+
+func reportMetaValue(meta []checkreport.KV, key string) string {
+	for _, item := range meta {
+		if item.Key == key {
+			return item.Value
+		}
+	}
+	return "-"
+}
+
+func legacyRuleStatus(check checkreport.Check) string {
+	if value := metaValue(check.Meta, "status"); value != "" {
+		return value
+	}
+	switch check.State {
+	case checkreport.CheckCritical:
+		return "FAIL"
+	case checkreport.CheckWarning:
+		return "WARN"
+	case checkreport.CheckPass:
+		return "PASS"
+	default:
+		return "NOTE"
 	}
 }
 
@@ -178,14 +198,17 @@ func (r *Result) addRule(status, name, target, detail string) {
 		Target: target,
 		Detail: detail,
 	})
+	r.Report = checkreport.Report{}
 }
 
 func (r *Result) addProblem(p Problem) {
 	if p.Ignored {
 		r.IgnoredProblems = append(r.IgnoredProblems, p)
+		r.Report = checkreport.Report{}
 		return
 	}
 	r.Problems = append(r.Problems, p)
+	r.Report = checkreport.Report{}
 }
 
 func (r *Result) addProblems(problems ...Problem) {
@@ -256,17 +279,6 @@ func (r *Result) finalTarget() string {
 		return r.FinalURL
 	}
 	return r.EffectiveRobotsURL
-}
-
-func statusLabel(exitCode int) string {
-	switch exitCode {
-	case ExitCritical:
-		return "CRITICAL"
-	case ExitWarning:
-		return "WARNING"
-	default:
-		return "OK"
-	}
 }
 
 func severityName(sev Severity) string {

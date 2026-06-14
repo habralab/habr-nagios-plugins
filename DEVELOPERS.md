@@ -75,8 +75,17 @@ When a probe supports ignored findings:
 Current probes:
 
 - `sitemap`: discovery and validation of sitemap entrypoints, trees, and extension payloads
-- `robots`: availability, syntax, policy, and documented crawler-behavior checks for `robots.txt`
+- `robots`: `robots.txt` availability, syntax, policy, extension-registry, and documented crawler-behavior checks with RFC-oriented, vendor-aware, and strict behavior modes
 - `dnschain`: authoritative delegation and DNSSEC chain checker, built around a structured report model and already covering secure delegation hops, parent-side missing-`DS` denial, `NSEC3PARAM` policy/consistency, and sampled final-zone `NSEC3` negative responses while still leaving room for fuller generic authenticated-denial coverage
+
+For `robots`, keep target and policy semantics explicit:
+
+- `--robots-url` means "fetch exactly this `robots.txt` URL" and overrides derived discovery targets
+- `-u/--url` means "use this base site URL for `robots.txt` discovery"
+- `-H/--hostname` means "derive an `https` base URL from this hostname and fetch `/robots.txt`"
+- default `behavior-profile` is `rfc`; `vendor-aware` and `strict` are opt-in overlays on top of the transport and syntax baseline
+- `--strict` is separate from `--behavior-profile` and is used for stricter local policy interpretation of known non-standard directives
+- `robots` keeps built-in registries for directives, crawler and AI tokens, and documented behavior claims; those registries should stay inspectable through dedicated list flags rather than being hidden inside verbose-only output
 
 For DNS-oriented probes, keep target semantics explicit:
 
@@ -415,6 +424,15 @@ Current sitemap probe conventions:
 - cross-host URLs and child sitemaps may be accepted only after cross-submit verification via the foreign host's `robots.txt`, with one `robots.txt` fetch per host per run
 - text sitemap payloads should warn on non-UTF-8 data and on URL lines that contain characters which should be percent-encoded
 - well-known sitemap extensions should be validated by namespace URI, not by XML prefix names
+
+Current robots probe conventions:
+
+- default overall timeout is `30s`
+- `HTTP 404` means "robots.txt not present" and should not be treated as a transport failure by default
+- `4xx` availability failures should remain distinct from `5xx` or fetch failures so operators can suppress policy noise without hiding server-side breakage
+- `--behavior-profile` should keep `rfc` as the default baseline, with `vendor-aware` and `strict` as opt-in overlays
+- `--strict` should remain independent from `--behavior-profile`, because local policy about extension directives is not the same as documented crawler behavior
+- built-in directive, agent, and behavior registries should stay discoverable through list flags and should carry provenance in verbose or structured output
 
 Concrete probe flags should be documented alongside each binary once they exist.
 

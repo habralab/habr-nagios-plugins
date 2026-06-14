@@ -2,11 +2,14 @@ package robotsapp
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/robots"
 )
 
@@ -17,6 +20,7 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 		"-H", "example.com",
 		"--robots-url", "https://example.com/robots.txt",
 		"--strict",
+		"--output", "json",
 		"--behavior-profile", "vendor-aware",
 		"--require-sitemap",
 		"--require-user-agent", "Googlebot,*",
@@ -57,6 +61,9 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 	}
 	if got, want := cfg.Verbosity, 2; got != want {
 		t.Fatalf("Verbosity = %d, want %d", got, want)
+	}
+	if got, want := cfg.OutputMode, checkreport.OutputJSON; got != want {
+		t.Fatalf("OutputMode = %q, want %q", got, want)
 	}
 }
 
@@ -121,6 +128,7 @@ func TestRunHelpMentionsPolicyOptions(t *testing.T) {
 		"Require at least one Sitemap directive.",
 		"Require one or more User-agent values to exist.",
 		"Fail when one or more Disallow rules are present exactly as written.",
+		"json emits the structured robots waterfall report for external renderers.",
 	} {
 		if !strings.Contains(output, snippet) {
 			t.Fatalf("Run() help output missing %q in:\n%s", snippet, output)
@@ -128,6 +136,48 @@ func TestRunHelpMentionsPolicyOptions(t *testing.T) {
 	}
 	if !strings.Contains(output, "check_habr_robots") {
 		t.Fatalf("Run() help output = %q, want installed binary name", output)
+	}
+}
+
+func TestRunJSONOutput(t *testing.T) {
+	originalRun := robotsRun
+	t.Cleanup(func() { robotsRun = originalRun })
+	robotsRun = func(_ context.Context, cfg robots.Config) (*robots.Result, error) {
+		result := &robots.Result{
+			Config:             cfg,
+			TargetSource:       "hostname",
+			EffectiveBaseURL:   "https://example.com",
+			EffectiveRobotsURL: "https://example.com/robots.txt",
+			FinalURL:           "https://example.com/robots.txt",
+			StatusCode:         200,
+			Encoding:           "utf-8",
+			Perf:               robots.PerfStats{},
+		}
+		result.Problems = []robots.Problem{{
+			Severity: robots.SeverityWarning,
+			Code:     "robots_empty",
+			Message:  "robots.txt is empty",
+			URL:      "https://example.com/robots.txt",
+		}}
+		return result, nil
+	}
+
+	exitCode, output := runWithCapturedStdout(t, testProgramName, []string{"-H", "example.com", "--output", "json"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	if got, want := report.Probe, "robots"; got != want {
+		t.Fatalf("report.Probe = %q, want %q", got, want)
+	}
+	if got, want := report.Status, checkreport.StatusWarning; got != want {
+		t.Fatalf("report.Status = %q, want %q", got, want)
+	}
+	if len(report.Findings) == 0 || report.Findings[0].Code != "robots_empty" {
+		t.Fatalf("report.Findings = %#v, want robots_empty", report.Findings)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 )
@@ -39,6 +40,7 @@ type Config struct {
 	RobotsURL               string
 	Strict                  bool
 	BehaviorProfile         BehaviorProfile
+	OutputMode              checkreport.OutputMode
 	Verbosity               int
 	Timeout                 time.Duration
 	HTTP                    httpx.Options
@@ -60,6 +62,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		BehaviorProfile: BehaviorProfileRFC,
+		OutputMode:      checkreport.OutputNagios,
 		Verbosity:       0,
 		Timeout:         30 * time.Second,
 		IgnoreErrorSet:  map[string]bool{},
@@ -111,6 +114,7 @@ type PerfStats struct {
 
 type Result struct {
 	Config             Config
+	Report             checkreport.Report
 	TargetSource       string
 	EffectiveBaseURL   string
 	EffectiveRobotsURL string

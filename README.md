@@ -27,15 +27,18 @@ Experimental probe:
 - validation of sitemap extensions: `xhtml:hreflang`, `image:image`, `news:news`, and `video:video`
 - Debian packaging as `habr-nagios-plugin-sitemap`
 
-`check_robots` validates `robots.txt` availability and policy shape:
+`check_robots` validates `robots.txt` availability, syntax, policy shape, and documented crawler behavior:
 
 - `OK`, `WARNING`, `CRITICAL`, and `UNKNOWN` exit codes
 - short Nagios-style summary output by default
 - deeper diagnostics through `-v`, `-vv`, and `-vvv`
-- base URL or explicit `robots.txt` targeting
-- checks for syntax, duplicate or invalid `Sitemap:` directives, and empty payloads
-- built-in registry for core, well-known extension, and AI crawler tokens with provenance metadata
+- hostname-derived, base-URL, or explicit `robots.txt` targeting
+- RFC-oriented default semantics with optional `vendor-aware` and `strict` behavior profiles
+- checks for syntax, invalid or duplicate `Sitemap:` directives, invalid path patterns, empty payloads, redirect loops, and near-limit payload sizes
+- built-in registries for directives, crawler and AI agent tokens, and documented behavior claims, all with provenance metadata
 - optional policy assertions such as required `Sitemap`, required `User-agent`, required `Disallow`, and forbidden `Disallow`
+- discoverable suppressible findings through `--list-error-slugs`
+- `json` output for the same structured waterfall report used by the probe internally
 - Debian packaging as `habr-nagios-plugin-robots`
 
 `check_dnschain` is an early authoritative DNS integrity checker:
@@ -97,6 +100,7 @@ make build-debug
 ./build/check_robots -H example.com
 ./build/check_robots --robots-url https://example.com/robots.txt --require-sitemap
 ./build/check_robots -H example.com --behavior-profile vendor-aware -vv
+./build/check_robots -H example.com --output json
 ./build/check_robots --list-known-directives
 ./build/check_robots --list-known-agents
 ./build/check_dnschain -H www.example.com
