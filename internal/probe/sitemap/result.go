@@ -182,8 +182,7 @@ func (r *Result) writeEntrypointsSection(b *strings.Builder) {
 func (r *Result) writeDocumentsSection(b *strings.Builder) {
 	b.WriteString("Documents:\n")
 	for _, doc := range r.Documents {
-		fmt.Fprintf(b, "  - depth=%d kind=%s status=%d entries=%d children=%d gzip=%t url=%s\n",
-			doc.Depth, doc.Kind, doc.StatusCode, doc.Entries, doc.Children, doc.Compressed, doc.URL)
+		fmt.Fprintf(b, "  - depth=%d kind=%s status=%d entries=%d children=%d encoding=%s gzip=%t url=%s\n", doc.Depth, doc.Kind, doc.StatusCode, doc.Entries, doc.Children, doc.Encoding, doc.Compressed, doc.URL)
 	}
 }
 

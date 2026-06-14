@@ -34,6 +34,12 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 		return doc, problems, nil, 0
 	}
 
+	scopeSourceURL := item.URL
+	if res.FinalURL != "" {
+		scopeSourceURL = res.FinalURL
+		result.trustHost(res.FinalURL)
+	}
+
 	doc.StatusCode = res.StatusCode
 	doc.Compressed = res.Payload.Compressed
 
@@ -43,7 +49,7 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 		return doc, problems, nil, 0
 	}
 
-	parsed, parseProblems := parseSitemapDocument(cfg, item.URL, res.Body)
+	parsed, parseProblems := parseSitemapDocument(cfg, item.URL, res.ContentType, res.Body)
 	parseDuration := time.Since(parseStart) - res.HeadersTime - res.ReadTime
 	if parseDuration < 0 {
 		parseDuration = 0
@@ -52,6 +58,7 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 	doc.Kind = parsed.Kind
 	doc.Entries = parsed.URLCount
 	doc.Children = len(parsed.Children)
+	doc.Encoding = parsed.Encoding
 	result.attachDocumentTiming(item.URL, res.HeadersTime, res.ReadTime, parseDuration, res.HeadersTime+res.ReadTime+parseDuration, res.Payload)
 	result.Perf.TotalNetBytes += res.Payload.NetBytes
 	result.Perf.TotalRawBytes += res.Payload.RawBytes
@@ -63,10 +70,26 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 	}
 
 	for _, child := range parsed.Children {
-		if err := validateChildURL(item.URL, child, baseSite, cfg); err != nil {
+		if err := checkChildScope(ctx, client, cfg, scopeSourceURL, child, baseSite, result); err != nil {
 			problems = append(problems, makeProblem(cfg, "child_scope_invalid", child, err.Error(), severityFromStrict(cfg.Strict)))
 			result.addRule(ruleStatusFromSeverity(severityFromStrict(cfg.Strict)), "child.scope", child, err.Error())
 		}
+	}
+
+	for _, entry := range parsed.URLs {
+		if err := checkEntryScope(ctx, client, cfg, scopeSourceURL, entry, result); err != nil {
+			problems = append(problems, makeProblem(cfg, "url_scope_invalid", entry, err.Error(), severityFromStrict(cfg.Strict)))
+			result.addRule(ruleStatusFromSeverity(severityFromStrict(cfg.Strict)), "url.scope", entry, err.Error())
+		}
+	}
+
+	for _, obs := range parsed.Extensions {
+		status := "PASS"
+		detail := fmt.Sprintf("namespace=%s entries=%d issues=%d", obs.NamespaceURI, obs.Count, obs.IssueCount)
+		if obs.IssueCount > 0 {
+			status = "WARN"
+		}
+		result.addRule(status, "extension."+obs.ID, item.URL, detail)
 	}
 
 	if parsed.Kind == "unknown" {
@@ -75,9 +98,55 @@ func inspectDocument(ctx context.Context, client *http.Client, cfg Config, baseS
 		return doc, problems, parsed.Children, parsed.URLCount
 	}
 
-	result.addRule("PASS", "document.parse", item.URL, fmt.Sprintf("kind=%s entries=%d children=%d gzip=%t", doc.Kind, doc.Entries, doc.Children, doc.Compressed))
+	result.addRule("PASS", "document.parse", item.URL, fmt.Sprintf("kind=%s entries=%d children=%d encoding=%s gzip=%t", doc.Kind, doc.Entries, doc.Children, doc.Encoding, doc.Compressed))
 
 	return doc, problems, parsed.Children, parsed.URLCount
+}
+
+func checkChildScope(ctx context.Context, client *http.Client, cfg Config, currentSitemap, child, baseSite string, result *Result) error {
+	if err := validateChildURL(currentSitemap, child, baseSite, result.CrossHostTrust, cfg); err == nil {
+		return nil
+	}
+
+	if cfg.AllowCrossHost {
+		return nil
+	}
+	trusted, robotsURL, trustErr := verifyCrossSubmitHost(ctx, client, cfg, child, currentSitemap, result)
+	if trusted {
+		if err := validateChildURL(currentSitemap, child, baseSite, result.CrossHostTrust, cfg); err == nil {
+			return nil
+		}
+	}
+	if trustErr != nil {
+		return fmt.Errorf("child sitemap host could not be verified for cross-submit via %s: %v", robotsURL, trustErr)
+	}
+	if robotsURL != "" {
+		return fmt.Errorf("child sitemap host is not delegated via %s to the current sitemap tree", robotsURL)
+	}
+	return validateChildURL(currentSitemap, child, baseSite, result.CrossHostTrust, cfg)
+}
+
+func checkEntryScope(ctx context.Context, client *http.Client, cfg Config, currentSitemap, entry string, result *Result) error {
+	if err := validateEntryURL(currentSitemap, entry, result.CrossHostTrust, cfg); err == nil {
+		return nil
+	}
+
+	if cfg.AllowCrossHost {
+		return nil
+	}
+	trusted, robotsURL, trustErr := verifyCrossSubmitHost(ctx, client, cfg, entry, currentSitemap, result)
+	if trusted {
+		if err := validateEntryURL(currentSitemap, entry, result.CrossHostTrust, cfg); err == nil {
+			return nil
+		}
+	}
+	if trustErr != nil {
+		return fmt.Errorf("entry URL host could not be verified for cross-submit via %s: %v", robotsURL, trustErr)
+	}
+	if robotsURL != "" {
+		return fmt.Errorf("entry URL host is not delegated via %s to the current sitemap tree", robotsURL)
+	}
+	return validateEntryURL(currentSitemap, entry, result.CrossHostTrust, cfg)
 }
 
 func fetch(ctx context.Context, client *http.Client, cfg Config, rawURL string, result *Result) (*fetchResult, error) {
@@ -107,6 +176,7 @@ func fetch(ctx context.Context, client *http.Client, cfg Config, rawURL string, 
 		ContentType: res.Header.Get("Content-Type"),
 		HeadersTime: lastHTTPCallHeadersTime(result, rawURL, http.MethodGet),
 		ReadTime:    readTime,
+		FinalURL:    res.Request.URL.String(),
 		Payload: PayloadStats{
 			Compressed: compressed,
 			NetBytes:   netBytes,
@@ -158,14 +228,30 @@ func decodeBody(rawURL string, res *http.Response) ([]byte, bool, time.Duration,
 	compressed := false
 
 	contentEncoding := strings.ToLower(strings.TrimSpace(res.Header.Get("Content-Encoding")))
-	if strings.Contains(contentEncoding, "gzip") || strings.HasSuffix(strings.ToLower(rawURL), ".gz") {
+	isGzipURL := strings.HasSuffix(strings.ToLower(rawURL), ".gz")
+
+	// We only wrap in gzip reader if Content-Encoding is gzip OR it's a .gz file.
+	// However, if net/http already decompressed it (it strips Content-Encoding),
+	// we shouldn't try to decompress again.
+	if strings.Contains(contentEncoding, "gzip") || (isGzipURL && contentEncoding == "") {
+		// Peek for gzip magic bytes to be absolutely sure before wrapping.
+		// Since we don't have an easy way to peek a Reader without complex buffering here,
+		// we'll try to create the reader and if it fails immediately with "invalid header",
+		// we might fall back to raw reader if it was just a .gz extension but not actually gzipped.
 		gzr, err := gzip.NewReader(counter)
 		if err != nil {
-			return nil, false, 0, counter.N, 0, fmt.Errorf("gzip decode failed: %w", err)
+			if isGzipURL && errors.Is(err, gzip.ErrHeader) {
+				// It has .gz extension but invalid header. Maybe it's already decompressed by CDN?
+				// Try to read it as raw.
+				reader = counter
+			} else {
+				return nil, false, 0, counter.N, 0, fmt.Errorf("gzip decode failed: %w", err)
+			}
+		} else {
+			defer gzr.Close()
+			reader = gzr
+			compressed = true
 		}
-		defer gzr.Close()
-		reader = gzr
-		compressed = true
 	}
 
 	start := time.Now()

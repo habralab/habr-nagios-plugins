@@ -101,8 +101,8 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 distclean: clean
+	$(GO) clean -modcache
 	rm -rf $(GOCACHE)
-	rm -rf $(GOMODCACHE)
 
 help:
 	@printf "%s\n" \

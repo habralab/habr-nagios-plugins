@@ -14,6 +14,10 @@ It validates sitemap discovery and sitemap tree integrity in a way that is usefu
 - short Nagios-style summary output by default
 - deeper diagnostics through `-v`, `-vv`, and `-vvv`
 - support for `robots.txt`, sitemap indexes, XML/text sitemaps, and `.gz`
+- redirect-aware discovery traces for `robots.txt` and common fallback paths
+- cross-submit verification through delegated `robots.txt` discovery on foreign hosts
+- UTF-8 and URL-escaping checks for text sitemap payloads
+- validation of sitemap extensions: `xhtml:hreflang`, `image:image`, `news:news`, and `video:video`
 - Debian packaging as `habr-nagios-plugin-sitemap`
 
 ## Goals

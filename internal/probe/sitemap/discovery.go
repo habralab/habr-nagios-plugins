@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -33,9 +34,32 @@ func discoverEntrypoints(ctx context.Context, client *http.Client, cfg Config, b
 			result.addRule("WARN", "robots.fetch", robotsURL, err.Error())
 			problems = append(problems, makeProblem(cfg, "robots_fetch_failed", robotsURL, err.Error()))
 		} else if len(discovery.Sitemaps) > 0 {
-			result.addRule("PASS", "robots.sitemap_directive", robotsURL, fmt.Sprintf("found %d sitemap entrypoints", len(discovery.Sitemaps)))
+			if discovery.FinalURL != "" && discovery.FinalURL != robotsURL {
+				result.addTrace("robots discovery redirected to %s", discovery.FinalURL)
+				result.addRule("PASS", "robots.redirect", robotsURL, fmt.Sprintf("redirected to %s", discovery.FinalURL))
+			}
+			parsedURL := robotsURL
+			if discovery.FinalURL != "" {
+				parsedURL = discovery.FinalURL
+			}
+			result.addTrace("parsed robots.txt %s, sitemap_directives=%d", parsedURL, len(discovery.Sitemaps))
+			ruleTarget := robotsURL
+			if discovery.FinalURL != "" && discovery.FinalURL != robotsURL {
+				ruleTarget = discovery.FinalURL
+			}
+			result.addRule("PASS", "robots.sitemap_directive", ruleTarget, fmt.Sprintf("found %d sitemap entrypoints", len(discovery.Sitemaps)))
 			result.addTrace("robots discovery found %d sitemap entrypoints", len(discovery.Sitemaps))
 			return uniqueURLs(discovery.Sitemaps), "robots", problems
+		} else {
+			if discovery.FinalURL != "" && discovery.FinalURL != robotsURL {
+				result.addTrace("robots discovery redirected to %s", discovery.FinalURL)
+				result.addRule("PASS", "robots.redirect", robotsURL, fmt.Sprintf("redirected to %s", discovery.FinalURL))
+			}
+			parsedURL := robotsURL
+			if discovery.FinalURL != "" {
+				parsedURL = discovery.FinalURL
+			}
+			result.addTrace("parsed robots.txt %s, sitemap_directives=%d", parsedURL, len(discovery.Sitemaps))
 		}
 		result.addRule("WARN", "robots.sitemap_directive", robotsURL, "no Sitemap directive found")
 		result.addTrace("robots discovery found no Sitemap directives")
@@ -48,17 +72,24 @@ func discoverEntrypoints(ctx context.Context, client *http.Client, cfg Config, b
 	found := make([]string, 0, 1)
 	for _, p := range cfg.FallbackPaths {
 		u := strings.TrimRight(baseSite, "/") + p
-		ok, err := probeURL(ctx, client, cfg, u, result)
+		result.addTrace("trying fallback probe via %s", u)
+		ok, finalURL, err := probeURL(ctx, client, cfg, u, result)
 		if err != nil {
 			result.addTrace("fallback probe failed %s: %v", u, err)
 			problems = append(problems, makeProblem(cfg, "fallback_probe_failed", u, err.Error()))
 			continue
 		}
+		probedURL := u
+		if finalURL != "" && finalURL != u {
+			result.addTrace("fallback probe redirected to %s", finalURL)
+			result.addRule("PASS", "fallback.redirect", u, fmt.Sprintf("redirected to %s", finalURL))
+			probedURL = finalURL
+		}
 		if ok {
-			result.addTrace("fallback probe matched %s", u)
-			found = append(found, u)
+			result.addTrace("fallback probe matched %s", probedURL)
+			found = append(found, probedURL)
 		} else {
-			result.addTrace("fallback probe miss %s", u)
+			result.addTrace("fallback probe miss %s", probedURL)
 		}
 	}
 
@@ -92,7 +123,7 @@ func parseRobots(ctx context.Context, client *http.Client, cfg Config, robotsURL
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(res.Body))
-	out := &robotsDiscovery{}
+	out := &robotsDiscovery{RequestedURL: robotsURL, FinalURL: res.FinalURL}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if idx := strings.Index(line, "#"); idx >= 0 {
@@ -120,34 +151,110 @@ func parseRobots(ctx context.Context, client *http.Client, cfg Config, robotsURL
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	result.addTrace("parsed robots.txt %s, sitemap_directives=%d", robotsURL, len(out.Sitemaps))
 	return out, nil
 }
 
-func probeURL(ctx context.Context, client *http.Client, cfg Config, rawURL string, result *Result) (bool, error) {
+func verifyCrossSubmitHost(ctx context.Context, client *http.Client, cfg Config, hostURL, currentSitemap string, result *Result) (bool, string, error) {
+	if result.trustsHost(hostURL) {
+		if result != nil && cfg.Verbosity > 1 {
+			result.addTrace("cross-submit trust already established for %s", hostURL)
+			result.addRule("PASS", "cross_submit.verify", hostURL, "host already trusted for the current sitemap tree")
+		}
+		return true, "", nil
+	}
+	if cached, ok := result.crossHostCheck(hostURL); ok {
+		if cached.Trusted {
+			result.trustHost(hostURL)
+			if result != nil && cfg.Verbosity > 1 {
+				result.addTrace("cross-submit trust for %s reused from cache via %s", hostURL, cached.Robots)
+				result.addRule("PASS", "cross_submit.verify", hostURL, fmt.Sprintf("host trust reused from cached %s", cached.Robots))
+			}
+		}
+		return cached.Trusted, cached.Robots, cacheError(cached.Err)
+	}
+
+	targetURL, err := url.Parse(hostURL)
+	if err != nil || targetURL.Scheme == "" || targetURL.Host == "" {
+		return false, "", nil
+	}
+	robotsURL := targetURL.Scheme + "://" + targetURL.Host + "/robots.txt"
+	discovery, err := parseRobots(ctx, client, cfg, robotsURL, result)
+	if err != nil {
+		result.setCrossHostCheck(hostURL, crossHostCheck{Trusted: false, Robots: robotsURL, Err: err.Error()})
+		return false, robotsURL, err
+	}
+
+	allowed := map[string]bool{}
+	for _, ep := range result.Entrypoints {
+		if normalized, nerr := normalizeURL(ep); nerr == nil {
+			allowed[normalized] = true
+		}
+	}
+	if currentSitemap != "" {
+		if normalized, nerr := normalizeURL(currentSitemap); nerr == nil {
+			allowed[normalized] = true
+		}
+	}
+
+	trusted := false
+	matchedSitemap := ""
+	for _, sitemap := range discovery.Sitemaps {
+		if allowed[sitemap] {
+			trusted = true
+			matchedSitemap = sitemap
+			break
+		}
+	}
+	result.setCrossHostCheck(hostURL, crossHostCheck{Trusted: trusted, Robots: robotsURL})
+	if trusted {
+		result.trustHost(hostURL)
+		if result != nil && cfg.Verbosity > 1 {
+			result.addTrace("cross-submit trust established for %s via %s pointing to %s", hostURL, robotsURL, matchedSitemap)
+			result.addRule("PASS", "cross_submit.verify", hostURL, fmt.Sprintf("host verified via %s referencing %s", robotsURL, matchedSitemap))
+		}
+	}
+	return trusted, robotsURL, nil
+}
+
+func cacheError(message string) error {
+	if message == "" {
+		return nil
+	}
+	return fmt.Errorf("%s", message)
+}
+
+func probeURL(ctx context.Context, client *http.Client, cfg Config, rawURL string, result *Result) (bool, string, error) {
 	res, err := fetchHTTP(ctx, client, cfg, rawURL, http.MethodHead, result, "fallback probe")
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer res.Body.Close()
+	finalURL := rawURL
+	if res.Request != nil && res.Request.URL != nil {
+		finalURL = res.Request.URL.String()
+	}
 
 	if res.StatusCode == http.StatusMethodNotAllowed || res.StatusCode == http.StatusNotImplemented {
 		return probeURLByContent(ctx, client, cfg, rawURL, result, "fallback probe retry after HEAD rejected")
 	}
 	if res.StatusCode != http.StatusOK {
-		return false, nil
+		return false, finalURL, nil
 	}
 	return probeURLByContent(ctx, client, cfg, rawURL, result, "fallback probe content validation")
 }
 
-func probeURLByContent(ctx context.Context, client *http.Client, cfg Config, rawURL string, result *Result, note string) (bool, error) {
+func probeURLByContent(ctx context.Context, client *http.Client, cfg Config, rawURL string, result *Result, note string) (bool, string, error) {
 	res, err := fetchHTTP(ctx, client, cfg, rawURL, http.MethodGet, result, note)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer res.Body.Close()
+	finalURL := rawURL
+	if res.Request != nil && res.Request.URL != nil {
+		finalURL = res.Request.URL.String()
+	}
 	if res.StatusCode != http.StatusOK {
-		return false, nil
+		return false, finalURL, nil
 	}
 
 	body, compressed, readTime, netBytes, rawBytes, err := decodeBody(rawURL, res)
@@ -155,14 +262,14 @@ func probeURLByContent(ctx context.Context, client *http.Client, cfg Config, raw
 		if result != nil {
 			result.attachHTTPError(rawURL, http.MethodGet, fmt.Sprintf("read error: %v", err), readTime, netBytes, rawBytes)
 		}
-		return false, err
+		return false, "", err
 	}
 	if result != nil {
 		result.attachHTTPRead(rawURL, http.MethodGet, readTime, netBytes, rawBytes, compressed)
 	}
-	parsed, _ := parseSitemapDocument(cfg, rawURL, body)
+	parsed, _ := parseSitemapDocument(cfg, rawURL, res.Header.Get("Content-Type"), body)
 	if parsed.Kind == "unknown" {
-		return false, nil
+		return false, finalURL, nil
 	}
-	return true, nil
+	return true, finalURL, nil
 }

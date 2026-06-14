@@ -98,9 +98,17 @@ type Result struct {
 	DiscoveredVia    string
 	TargetSource     string
 	EffectiveBaseURL string
+	CrossHostTrust   map[string]bool // map["host:port"]verified
+	CrossHostChecks  map[string]crossHostCheck
+	MaxObservedDepth int
 	TotalURLs        int
 	Perf             PerfStats
-	MaxObservedDepth int
+}
+
+type crossHostCheck struct {
+	Trusted bool
+	Robots  string
+	Err     string
 }
 
 type DocumentResult struct {
@@ -110,6 +118,7 @@ type DocumentResult struct {
 	Depth      int
 	Entries    int
 	Children   int
+	Encoding   string
 	Compressed bool
 }
 
@@ -154,7 +163,9 @@ type queueItem struct {
 }
 
 type robotsDiscovery struct {
-	Sitemaps []string
+	RequestedURL string
+	FinalURL     string
+	Sitemaps     []string
 }
 
 type fetchResult struct {
@@ -163,6 +174,7 @@ type fetchResult struct {
 	ContentType string
 	HeadersTime time.Duration
 	ReadTime    time.Duration
+	FinalURL    string
 	Payload     PayloadStats
 }
 
@@ -180,8 +192,18 @@ func (c *countingReader) Read(p []byte) (int, error) {
 type parsedSitemap struct {
 	Kind       string
 	URLCount   int
+	URLs       []string
 	Children   []string
+	Extensions []ExtensionObservation
+	Encoding   string
 	Compressed bool
+}
+
+type ExtensionObservation struct {
+	ID           string
+	NamespaceURI string
+	Count        int
+	IssueCount   int
 }
 
 func Run(ctx context.Context, cfg Config) (*Result, error) {
@@ -199,11 +221,18 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if client == nil {
 		client = httpx.NewClient(cfg.Timeout, cfg.HTTP)
 	}
-	result := &Result{Config: cfg}
+	result := &Result{
+		Config:          cfg,
+		CrossHostTrust:  map[string]bool{},
+		CrossHostChecks: map[string]crossHostCheck{},
+	}
 	defer func() {
 		result.Perf.Elapsed = time.Since(startedAt)
 		result.updateRuntimeStats()
 	}()
+	if baseSite != "" {
+		result.trustHost(baseSite)
+	}
 	client = withTraceRedirects(client, result)
 	result.TargetSource = targetSource(cfg)
 	result.EffectiveBaseURL = baseSite
@@ -236,6 +265,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if queued[ep] {
 			continue
 		}
+		result.trustHost(ep)
 		queue = append(queue, queueItem{URL: ep, Depth: 0})
 		queued[ep] = true
 		parents[ep] = ""

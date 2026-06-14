@@ -17,7 +17,9 @@ func TestRunLiveHTTPServer(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/robots.txt":
-			http.Redirect(w, r, server.URL+"/robots-final.txt", http.StatusMovedPermanently)
+			http.Redirect(w, r, server.URL+"/robots-mid.txt", http.StatusMovedPermanently)
+		case "/robots-mid.txt":
+			http.Redirect(w, r, server.URL+"/robots-final.txt", http.StatusFound)
 		case "/robots-final.txt":
 			fmt.Fprintf(w, "User-agent: *\nSitemap: %s/sitemap.xml\n", server.URL)
 		case "/sitemap.xml":
@@ -45,6 +47,9 @@ func TestRunLiveHTTPServer(t *testing.T) {
 	detail := result.Detail()
 	if !strings.Contains(detail, "redirect") {
 		t.Fatalf("Detail() = %q, want redirect trace", detail)
+	}
+	if !strings.Contains(detail, "robots discovery redirected to "+server.URL+"/robots-final.txt") {
+		t.Fatalf("Detail() = %q, want final redirect narrative", detail)
 	}
 	if !strings.Contains(detail, "PASS document.content_type: application/xml") {
 		t.Fatalf("Detail() = %q, want content type pass rule", detail)
@@ -198,6 +203,58 @@ func TestRunLiveInvalidURLPayload(t *testing.T) {
 	}
 	if got := result.Summary(); !strings.Contains(got, `parse "://bad-url": missing protocol scheme`) {
 		t.Fatalf("Summary() = %q, want invalid URL error", got)
+	}
+}
+
+func TestRunLiveTextSitemap(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "%s/catalog/page-1\n%s/catalog/page-2\n", server.URL, server.URL)
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.URL = server.URL
+	cfg.Entrypoint = server.URL + "/catalog/sitemap.txt"
+	cfg.Verbosity = 1
+	cfg.Timeout = 3 * time.Second
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := result.ExitCode(); got != ExitOK {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitOK)
+	}
+	if got := result.Documents[0].Kind; got != "text" {
+		t.Fatalf("Document kind = %q, want text", got)
+	}
+}
+
+func TestRunLiveTextSitemapScopeViolation(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "%s/outside/page-1\n", server.URL)
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.URL = server.URL
+	cfg.Entrypoint = server.URL + "/catalog/sitemap.txt"
+	cfg.Verbosity = 1
+	cfg.Timeout = 3 * time.Second
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := result.ExitCode(); got != ExitWarning {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitWarning)
+	}
+	if got := result.Summary(); !strings.Contains(got, "violates sitemap path scope") {
+		t.Fatalf("Summary() = %q, want text sitemap scope warning", got)
 	}
 }
 

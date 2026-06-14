@@ -169,3 +169,59 @@ func emptyAsDash(s string) string {
 	}
 	return s
 }
+
+func trustedHostKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if u.Hostname() == "" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname()) + ":" + normalizedPort(u)
+}
+
+func trustedHostKeyFromURL(u *url.URL) string {
+	if u == nil || u.Hostname() == "" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname()) + ":" + normalizedPort(u)
+}
+
+func (r *Result) trustHost(raw string) {
+	if r == nil || r.CrossHostTrust == nil {
+		return
+	}
+	if key := trustedHostKey(raw); key != "" {
+		r.CrossHostTrust[key] = true
+	}
+}
+
+func (r *Result) trustsHost(raw string) bool {
+	if r == nil || r.CrossHostTrust == nil {
+		return false
+	}
+	key := trustedHostKey(raw)
+	return key != "" && r.CrossHostTrust[key]
+}
+
+func (r *Result) crossHostCheck(raw string) (crossHostCheck, bool) {
+	if r == nil || r.CrossHostChecks == nil {
+		return crossHostCheck{}, false
+	}
+	key := trustedHostKey(raw)
+	if key == "" {
+		return crossHostCheck{}, false
+	}
+	check, ok := r.CrossHostChecks[key]
+	return check, ok
+}
+
+func (r *Result) setCrossHostCheck(raw string, check crossHostCheck) {
+	if r == nil || r.CrossHostChecks == nil {
+		return
+	}
+	if key := trustedHostKey(raw); key != "" {
+		r.CrossHostChecks[key] = check
+	}
+}

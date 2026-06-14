@@ -281,6 +281,9 @@ Each new probe should reserve a place for:
 - package-local unit tests
 - `testdata/` fixtures when format-heavy parsing exists
 - mockable transport or resolver interfaces where external I/O is involved
+- modular validation for format extensions (e.g., sitemap hreflang/image/news/video)
+- redirect-chain cases for discovery paths that depend on `net/http` behavior
+- explicit text sitemap cases for UTF-8, escaping, and scope rules
 
 The root `Makefile` may expose a separate target for opt-in integration suites, such as `test-live`, when those tests require a local listener and are not safe in every sandboxed environment.
 
@@ -313,6 +316,10 @@ Current sitemap probe conventions:
 - traversal-limit results should surface as incomplete checker outcomes rather than false protocol-invalid `CRITICAL` states
 - cyclic sitemap references should be reported as soft failures (`WARNING`) unless the standard explicitly requires harder treatment
 - fallback discovery should be confirmed by content validation, not only `HEAD 200`
+- discovery traces should narrate redirects in order, so operators do not need to reconstruct them from the raw HTTP section
+- cross-host URLs and child sitemaps may be accepted only after cross-submit verification via the foreign host's `robots.txt`, with one `robots.txt` fetch per host per run
+- text sitemap payloads should warn on non-UTF-8 data and on URL lines that contain characters which should be percent-encoded
+- well-known sitemap extensions should be validated by namespace URI, not by XML prefix names
 
 Concrete probe flags should be documented alongside each binary once they exist.
 
