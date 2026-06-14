@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 func (r *Result) ExitCode() int {
@@ -203,6 +204,10 @@ func CatalogHasSlug(slug string) bool {
 
 func CatalogSlugs() []string {
 	return finding.CatalogSlugs()
+}
+
+func CatalogEntries() []probecli.ErrorSlugDescriptor {
+	return finding.CatalogEntries()
 }
 
 func (r *Result) countProblems(sev Severity) int {

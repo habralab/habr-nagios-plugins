@@ -29,9 +29,7 @@ func Run(programName string, args []string) int {
 		return robots.ExitOK
 	}
 	if cfg.ShowErrorSlugs {
-		for _, slug := range robots.CatalogSlugs() {
-			fmt.Println(slug)
-		}
+		fmt.Print(probecli.RenderErrorSlugDescriptors(robots.CatalogEntries()))
 		return robots.ExitOK
 	}
 	if cfg.ShowKnownDirectives {
@@ -226,7 +224,7 @@ func printHelp(binName string) {
 		},
 		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 30s.", Examples: []string{"-t 30s", "--timeout 120s"}},
 		{Short: "-v", Long: "--verbose", Description: "Increase output detail.\nRepeat up to 3 times for deeper diagnostics.", Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
-		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs and exit."},
+		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs with category, default severity, and message, then exit."},
 		{Long: "--list-known-directives", Description: "Print the built-in robots.txt directive registry and exit.\nIncludes core, well-known, vendor, and observed extensions."},
 		{Long: "--list-known-agents", Description: "Print the built-in crawler and AI agent registry and exit."},
 		{Long: "--list-agent-behaviors", Description: "Print the built-in documented crawler behavior matrix and exit.\nUse this to inspect what vendor-aware and strict mode can reason about."},

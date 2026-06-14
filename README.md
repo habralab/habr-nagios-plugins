@@ -11,6 +11,10 @@ Released probes:
 - `check_sitemap`
 - `check_robots`
 
+Experimental probe:
+
+- `check_dnschain`
+
 `check_sitemap` validates sitemap discovery and sitemap tree integrity in a way that is useful for monitoring:
 
 - `OK`, `WARNING`, `CRITICAL`, and `UNKNOWN` exit codes
@@ -33,6 +37,17 @@ Released probes:
 - built-in registry for core, well-known extension, and AI crawler tokens with provenance metadata
 - optional policy assertions such as required `Sitemap`, required `User-agent`, required `Disallow`, and forbidden `Disallow`
 - Debian packaging as `habr-nagios-plugin-robots`
+
+`check_dnschain` is an early authoritative DNS integrity checker:
+
+- direct iterative discovery from bundled root hints instead of relying on the local recursive resolver
+- short Nagios-style output by default
+- `json` output for the same structured waterfall report
+- current checks cover delegation walk, child authoritative reachability, parent/child `NS` alignment, root trust-anchor bootstrapping, parent `DS` RRset signature validation, child `DNSKEY` RRset signature validation along secure hops, and per-endpoint `SOA` / `NS` / `DNSKEY` consistency checks across advertised authoritative addresses
+- in hostname mode, the checker also verifies owner-level `CNAME` / `A` / `AAAA` presence and consistency on the final zone authoritative servers, following same-zone `CNAME` chains to terminal address data while treating foreign-zone `CNAME` targets as out of scope for recursive validation
+- DNSSEC coverage is still partial but already operational: secure-hop validation, parent-side authenticated denial for missing `DS` via exact `NSEC` / `NSEC3` proofs and `NSEC3` closest-encloser opt-out proofs, apex `NSEC3PARAM` policy and consistency checks, and sampled final-zone `NSEC3` `NXDOMAIN` / `NODATA` proof validation are supported; full generic `NSEC` / `NSEC3` validation for every possible negative response pattern is not implemented yet
+- authoritative transport probing attempts both IPv4 and IPv6 endpoints when available, and endpoint health is tracked per advertised address rather than only per nameserver name
+- transport and DNSSEC semantics are reported separately: query timeouts and endpoint reachability issues surface as transport findings, while non-authoritative answers, bad signatures, and invalid proofs stay in delegation or DNSSEC findings
 
 ## Goals
 
@@ -61,6 +76,12 @@ Default local output for the robots probe:
 build/check_robots
 ```
 
+Default local output for the dnschain probe:
+
+```bash
+build/check_dnschain
+```
+
 If you need a debug-friendlier local build with symbols intact:
 
 ```bash
@@ -78,6 +99,11 @@ make build-debug
 ./build/check_robots -H example.com --behavior-profile vendor-aware -vv
 ./build/check_robots --list-known-directives
 ./build/check_robots --list-known-agents
+./build/check_dnschain -H www.example.com
+./build/check_dnschain --zone example.com --output json
+./build/check_dnschain -H habr.com -t 30s --query-timeout 3s -vv
+./build/check_dnschain --zone habr.com --query-timeout 3s -vv
+./build/check_dnschain --zone com --ignore-errors dnschain_child_soa_inconsistent -v
 ```
 
 Installed Debian package payloads:

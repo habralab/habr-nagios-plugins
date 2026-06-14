@@ -53,10 +53,65 @@ Internal flow:
 4. Findings are created through shared policy modules.
 5. Output is rendered as a compact summary or a more verbose diagnostic report.
 
+Common CLI conventions across mature probes should stay aligned where the semantics match:
+
+- `-H/--hostname` for hostname-derived target selection
+- `-u/--url` only for HTTP-based probes
+- `-t/--timeout`
+- `-v/--verbose` with shared normalization and clamping
+- `-h/--help`
+- `-V/--version`
+- `--ignore-errors` for finding slugs suppressed from status aggregation
+- `--list-error-slugs` for discoverability of suppressible findings
+
+When a probe supports ignored findings:
+
+- ignored findings should disappear from status aggregation
+- ignored findings should remain visible in verbose text output
+- ignored findings should be exposed separately from active findings in structured output
+- slug parsing and validation should reuse shared helpers where possible
+- suppressible findings should be discoverable through a structured catalog entry shape: slug, category, default severity, and default message
+
 Current probes:
 
 - `sitemap`: discovery and validation of sitemap entrypoints, trees, and extension payloads
 - `robots`: availability, syntax, policy, and documented crawler-behavior checks for `robots.txt`
+- `dnschain`: authoritative delegation and DNSSEC chain checker, built around a structured report model and already covering secure delegation hops, parent-side missing-`DS` denial, `NSEC3PARAM` policy/consistency, and sampled final-zone `NSEC3` negative responses while still leaving room for fuller generic authenticated-denial coverage
+
+For DNS-oriented probes, keep target semantics explicit:
+
+- `--zone` means "analyze this zone cut directly"
+- `-H/--hostname` means "start from this owner name, derive its enclosing zone, validate the zone chain, and then validate owner-level RR presence appropriate for the probe"
+- in `dnschain`, hostname mode currently checks owner-level `CNAME` / `A` / `AAAA` presence and consistency on the final zone authoritative servers, follows same-zone `CNAME` chains to terminal address data, and still does not recurse through foreign-zone `CNAME` targets
+
+For DNSSEC denial handling in `dnschain`, keep the internal model explicit:
+
+- parse denial material into typed proof entities rather than scattering NSEC/NSEC3 logic inline
+- keep proof classification (`exact NSEC`, `exact NSEC3`, `closest-encloser opt-out`, unsupported) separate from signature verification
+- attach proof evidence to staged checks so both Nagios verbose output and future machine-readable consumers can explain why a delegation was classified as insecure
+- keep the parent-side insecure-delegation proofs and final-zone sampled negative-response proofs separate in the model, even if they share common NSEC/NSEC3 helpers
+- treat sampled final-zone `NXDOMAIN` / `NODATA` checks as runtime evidence of validator-compatible denial behavior, not as a claim that the checker has exhaustively proven every negative response form for the zone
+
+For DNSSEC algorithm handling in `dnschain`, keep three layers separate:
+
+- cryptographic validity of the active trust path
+- policy quality of active and published algorithms or digest types (`recommended`, `acceptable`, `not_recommended`, `must_not`)
+- checker capability limits for algorithms or digest types that are known in standards but not implemented by the current crypto stack
+
+This is important for verdict quality:
+
+- active-path use of `must_not` or `not_recommended` material should not be conflated with harmless published rollover tails
+- published but unmatched `DS` tails should stay visible in verbose evidence without automatically degrading the summary status
+- unsupported-but-published algorithms should be reported explicitly as capability gaps rather than silently treated as valid or invalid
+
+For `dnschain`, keep transport semantics conservative:
+
+- classic authoritative DNS does not have a normal `User-Agent`-style client identification field
+- do not invent one by overloading unrelated EDNS options
+- TSIG/SIG(0)/EDNS options may be added later when their protocol semantics are actually needed, but they are not a generic checker identity mechanism
+- query I/O failures should surface as transport findings regardless of whether the failed query was for `SOA`, `NS`, `DNSKEY`, `DS`, `NSEC3PARAM`, or sampled denial probes
+- stage-specific findings such as invalid signatures, non-authoritative answers, or unrecognized denial proofs should remain separate from transport so operators can suppress reachability noise without hiding semantic DNSSEC failures
+- unlike the HTTP probes, `dnschain` needs both an overall check timeout and a per-query timeout; the current convention is `-t/--timeout` for the whole run and `--query-timeout` for individual exchanges
 
 ## Modular Direction
 
@@ -156,6 +211,8 @@ Current direction:
 - shared verbosity parsing and clamping live in `internal/core/verbosity`
 - shared target URL normalization and base-site derivation live in `internal/core/targeturl`
 - shared probe CLI helpers for program naming, timeout parsing, CSV parsing, and ignored-slug validation live in `internal/core/probecli`
+- shared report structures for staged checks and multi-renderer output live in `internal/core/checkreport`
+- shared renderer-facing check presentation helpers also live in `internal/core/checkreport` when they operate only on the shared report model, for example verbosity-aware hiding of low-level checks and aggregation of repeated success checks
 - probe apps should aggregate shared and probe-local flags into one help output
 - shared options should appear in a stable order in CLI help
 - the default HTTP `User-Agent` should identify the whole tool family, not a single probe binary
@@ -167,6 +224,24 @@ Practical rule for moving code into `internal/core`:
 - prefer tiny helpers with clear inputs and outputs over shared result/rendering frameworks
 - keep transport, target normalization, verbosity handling, and finding policy shared
 - keep probe-specific parsing, traversal, registries, and output semantics inside the probe package unless a third probe proves a stable abstraction
+
+Current exception:
+
+- a small structured report model is acceptable in shared code when it remains renderer-neutral and does not dictate probe-local wording or evidence shape
+- the intended contract is: collector/analyzer code produces structured stages, checks, findings, and metrics; renderers then emit Nagios-style text, JSON, or later external-consumer formats from the same report tree
+- the shared report model may also carry target sets, trace events, partial-coverage markers, and suppressed findings when that helps represent mature probe behavior without forcing probe-specific JSON schemas
+- the shared report model may also carry renderer hints on individual checks, such as `min_verbosity`, `aggregation_key`, and `aggregation_mode`, so text renderers can collapse repeated success noise without deleting atomic evidence from JSON output
+
+Current renderer policy:
+
+- analyzers should emit atomic checks and evidence first
+- JSON output should stay close to that atomic report tree
+- text renderers may aggregate only where the report explicitly opts in through shared hints
+- aggregation belongs in renderers, not in collectors or analyzers
+- default text output should prefer summary and problems
+- `-v` should show compact stage-level diagnostics with repeated success checks collapsed
+- `-vv` may add trace and grouped low-level success detail
+- `-vvv` should be close to the full unaggregated waterfall
 
 ## Probe Identity And Naming
 
@@ -378,5 +453,13 @@ Keep public and developer-facing documentation separate:
 
 - `README.md`: repository purpose, current probes, basic build commands, release-facing overview
 - `DEVELOPERS.md`: architecture, module boundaries, build model, testing expectations, future extension rules
+- `external/`: mirrored external references and vendored upstream artifacts, organized by source namespace such as `ietf/`, `iana/`, `cabf/`, with a repository-wide registry
 
 When adding a new probe, update both only where it changes repository-level understanding. Detailed probe behavior belongs near the probe code or in probe-specific docs later.
+
+Current technical debt in this area:
+
+- Go `//go:embed` cannot consume canonical files directly from `external/` when they live outside the embedding package tree.
+- Some probes therefore keep package-local `embeddata/` copies as derived build shims.
+- Treat those copies as disposable packaging artifacts, not as a second source-of-truth.
+- The repository should eventually grow a small lifecycle manager or sync helper that refreshes derived `embeddata/` trees from canonical files under `external/`.

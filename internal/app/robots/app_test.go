@@ -75,8 +75,15 @@ func TestRunListErrorSlugs(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
 	}
-	if !strings.Contains(output, "robots_empty\n") || !strings.Contains(output, "robots_bad_status\n") {
-		t.Fatalf("Run() output = %q, want representative robots error slugs", output)
+	for _, snippet := range []string{
+		"robots_empty",
+		"content",
+		"robots_bad_status",
+		"transport",
+	} {
+		if !strings.Contains(output, snippet) {
+			t.Fatalf("Run() output missing %q in:\n%s", snippet, output)
+		}
 	}
 }
 

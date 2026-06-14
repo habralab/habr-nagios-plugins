@@ -31,9 +31,7 @@ func Run(programName string, args []string) int {
 	}
 
 	if cfg.ShowErrorSlugs {
-		for _, slug := range sitemap.CatalogSlugs() {
-			fmt.Println(slug)
-		}
+		fmt.Print(probecli.RenderErrorSlugDescriptors(sitemap.CatalogEntries()))
 		return sitemap.ExitOK
 	}
 
@@ -201,7 +199,7 @@ func printHelp(binName string) {
 				"--ignore-errors fallback_used,content_type_unexpected",
 			},
 		},
-		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs and exit."},
+		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs with category, default severity, and message, then exit."},
 		{Long: "--max-depth", Description: "Maximum sitemap tree depth before traversal stops.\nUse 0 to disable the limit.", Examples: []string{"--max-depth 0", "--max-depth 8"}},
 		{Long: "--max-files", Description: "Maximum number of sitemap documents to fetch.\nUse 0 to disable the limit.", Examples: []string{"--max-files 0", "--max-files 500"}},
 		{Long: "--max-urls", Description: "Maximum number of URL entries to parse across the whole tree.\nUse 0 to disable the limit.", Examples: []string{"--max-urls 0", "--max-urls 200000"}},

@@ -27,3 +27,22 @@ func TestBuildIgnoreErrorSetValidatesSlugs(t *testing.T) {
 		t.Fatalf("BuildIgnoreErrorSet() error = %v, want unknown slug", err)
 	}
 }
+
+func TestRenderErrorSlugDescriptorsProducesTabularOutput(t *testing.T) {
+	out := RenderErrorSlugDescriptors([]ErrorSlugDescriptor{
+		{Slug: "slug_one", Category: "transport", Severity: "WARNING", Message: "endpoint timed out"},
+		{Slug: "slug_two", Message: "message only"},
+	})
+	for _, snippet := range []string{
+		"slug_one",
+		"transport",
+		"WARNING",
+		"endpoint timed out",
+		"slug_two",
+		"message only",
+	} {
+		if !strings.Contains(out, snippet) {
+			t.Fatalf("RenderErrorSlugDescriptors() output missing %q in:\n%s", snippet, out)
+		}
+	}
+}

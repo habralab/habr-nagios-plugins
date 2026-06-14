@@ -1,6 +1,11 @@
 package finding
 
-import "sort"
+import (
+	"sort"
+	"strings"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
+)
 
 type Severity int
 
@@ -20,6 +25,7 @@ type Problem struct {
 
 type ProblemSpec struct {
 	Slug            string
+	Category        string
 	DefaultSeverity Severity
 	DefaultMessage  string
 }
@@ -131,6 +137,25 @@ func CatalogSlugs() []string {
 	return out
 }
 
+func CatalogEntries() []probecli.ErrorSlugDescriptor {
+	slugs := CatalogSlugs()
+	out := make([]probecli.ErrorSlugDescriptor, 0, len(slugs))
+	for _, slug := range slugs {
+		spec := Catalog[slug]
+		category := spec.Category
+		if category == "" {
+			category = inferCategory(slug)
+		}
+		out = append(out, probecli.ErrorSlugDescriptor{
+			Slug:     spec.Slug,
+			Category: category,
+			Severity: SeverityName(spec.DefaultSeverity),
+			Message:  spec.DefaultMessage,
+		})
+	}
+	return out
+}
+
 func SeverityName(sev Severity) string {
 	switch sev {
 	case SeverityCritical:
@@ -139,5 +164,43 @@ func SeverityName(sev Severity) string {
 		return "WARNING"
 	default:
 		return "OK"
+	}
+}
+
+func inferCategory(slug string) string {
+	switch {
+	case strings.HasPrefix(slug, "robots_"):
+		return inferRobotsCategory(slug)
+	case strings.HasPrefix(slug, "extension_"):
+		return "extension"
+	case slug == "entrypoint_not_found" || slug == "invalid_entrypoint" || slug == "fallback_probe_failed" || slug == "fallback_used":
+		return "discovery"
+	case slug == "check_timeout" || slug == "fetch_timeout" || slug == "fetch_failed" || slug == "bad_status" || slug == "content_type_unexpected":
+		return "transport"
+	case strings.Contains(slug, "scope") || slug == "invalid_url" || slug == "invalid_loc" || slug == "missing_loc":
+		return "scope"
+	case strings.Contains(slug, "max_") || strings.Contains(slug, "limit_exceeded"):
+		return "limits"
+	case strings.Contains(slug, "parse_failed") || slug == "unsupported_format" || slug == "empty_document" || slug == "non_utf8_encoding":
+		return "content"
+	default:
+		return "validation"
+	}
+}
+
+func inferRobotsCategory(slug string) string {
+	switch {
+	case strings.Contains(slug, "fetch") || strings.Contains(slug, "redirect") || strings.Contains(slug, "status") || strings.Contains(slug, "too_large") || strings.Contains(slug, "size_near_limit"):
+		return "transport"
+	case strings.Contains(slug, "invalid_line") || strings.Contains(slug, "invalid_path") || strings.Contains(slug, "unknown_directive") || strings.Contains(slug, "extension_directive"):
+		return "syntax"
+	case strings.Contains(slug, "invalid_sitemap") || strings.Contains(slug, "duplicate_sitemap") || strings.Contains(slug, "rule_missing") || strings.Contains(slug, "rule_forbidden") || strings.Contains(slug, "no_groups"):
+		return "policy"
+	case strings.Contains(slug, "content_type") || strings.Contains(slug, "non_utf8") || strings.Contains(slug, "empty"):
+		return "content"
+	case strings.Contains(slug, "agent_"):
+		return "behavior"
+	default:
+		return "robots"
 	}
 }

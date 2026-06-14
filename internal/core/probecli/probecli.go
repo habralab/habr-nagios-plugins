@@ -1,11 +1,20 @@
 package probecli
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 	"time"
 )
+
+type ErrorSlugDescriptor struct {
+	Slug     string
+	Category string
+	Severity string
+	Message  string
+}
 
 func EffectiveProgramName(programName, defaultBinaryName string) string {
 	name := strings.TrimSpace(filepath.Base(programName))
@@ -49,4 +58,21 @@ func BuildIgnoreErrorSet(raw string, hasSlug func(string) bool) ([]string, map[s
 		out[item] = true
 	}
 	return items, out, nil
+}
+
+func RenderErrorSlugDescriptors(items []ErrorSlugDescriptor) string {
+	var buf bytes.Buffer
+	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	for _, item := range items {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Slug, emptyDescriptorField(item.Category), emptyDescriptorField(item.Severity), emptyDescriptorField(item.Message))
+	}
+	_ = w.Flush()
+	return buf.String()
+}
+
+func emptyDescriptorField(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }

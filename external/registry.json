@@ -1,0 +1,281 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "ietf",
+      "kind": "standards-body",
+      "base_url": "https://www.rfc-editor.org/"
+    },
+    {
+      "id": "iana",
+      "kind": "technical-operator",
+      "base_url": "https://www.iana.org/"
+    }
+  ],
+  "documents": [
+    {
+      "id": "rfc1034",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dns",
+      "title": "Domain Concepts and Facilities",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc1034.txt",
+      "local_path": "external/ietf/rfc/rfc1034.txt",
+      "format": "text/plain",
+      "tags": ["dns", "core"]
+    },
+    {
+      "id": "rfc1035",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dns",
+      "title": "Domain Implementation and Specification",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc1035.txt",
+      "local_path": "external/ietf/rfc/rfc1035.txt",
+      "format": "text/plain",
+      "tags": ["dns", "wire", "core"]
+    },
+    {
+      "id": "rfc4033",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "DNS Security Introduction and Requirements",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc4033.txt",
+      "local_path": "external/ietf/rfc/rfc4033.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "overview"]
+    },
+    {
+      "id": "rfc4034",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Resource Records for the DNS Security Extensions",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc4034.txt",
+      "local_path": "external/ietf/rfc/rfc4034.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "rrtypes", "dnskey", "ds", "rrsig"]
+    },
+    {
+      "id": "rfc4035",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Protocol Modifications for the DNS Security Extensions",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc4035.txt",
+      "local_path": "external/ietf/rfc/rfc4035.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "validation", "resolver", "authoritative"]
+    },
+    {
+      "id": "rfc5011",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Automated Updates of DNS Security Trust Anchors",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc5011.txt",
+      "local_path": "external/ietf/rfc/rfc5011.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "trust-anchor", "rollover"]
+    },
+    {
+      "id": "rfc5155",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "DNS Security (DNSSEC) Hashed Authenticated Denial of Existence",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc5155.txt",
+      "local_path": "external/ietf/rfc/rfc5155.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "nsec3", "denial-of-existence"]
+    },
+    {
+      "id": "rfc5280",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "x509",
+      "title": "Internet X.509 Public Key Infrastructure Certificate and CRL Profile",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc5280.txt",
+      "local_path": "external/ietf/rfc/rfc5280.txt",
+      "format": "text/plain",
+      "tags": ["x509", "pkix", "certificate", "crl"]
+    },
+    {
+      "id": "rfc5914",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Trust Anchor Format",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc5914.txt",
+      "local_path": "external/ietf/rfc/rfc5914.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "trust-anchor", "format"]
+    },
+    {
+      "id": "rfc6698",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dane",
+      "title": "The DNS-Based Authentication of Named Entities (DANE) Transport Layer Security (TLS) Protocol: TLSA",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc6698.txt",
+      "local_path": "external/ietf/rfc/rfc6698.txt",
+      "format": "text/plain",
+      "tags": ["dane", "tlsa", "dnssec", "tls"]
+    },
+    {
+      "id": "rfc6840",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Clarifications and Implementation Notes for DNS Security (DNSSEC)",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc6840.txt",
+      "local_path": "external/ietf/rfc/rfc6840.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "clarification", "implementation"]
+    },
+    {
+      "id": "rfc6944",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Applicability Statement: DNS Security (DNSSEC) DNSKEY Algorithm Implementation Status",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc6944.txt",
+      "local_path": "external/ietf/rfc/rfc6944.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "algorithms", "applicability"]
+    },
+    {
+      "id": "rfc8624",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Algorithm Implementation Requirements and Usage Guidance for DNSSEC",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc8624.txt",
+      "local_path": "external/ietf/rfc/rfc8624.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "algorithms", "guidance", "implementation"]
+    },
+    {
+      "id": "rfc9077",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "NSEC and NSEC3: TTLs and Aggressive Use",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc9077.txt",
+      "local_path": "external/ietf/rfc/rfc9077.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "nsec", "nsec3", "ttl", "negative-caching"]
+    },
+    {
+      "id": "rfc9157",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Revised IANA Considerations for DNSSEC",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc9157.txt",
+      "local_path": "external/ietf/rfc/rfc9157.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "iana", "registry"]
+    },
+    {
+      "id": "rfc9276",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Guidance for NSEC3 Parameter Settings",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc9276.txt",
+      "local_path": "external/ietf/rfc/rfc9276.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "nsec3", "parameters", "iterations", "salt"]
+    },
+    {
+      "id": "rfc9904",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "DNSSEC Cryptographic Algorithm Recommendation Update Process",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc9904.txt",
+      "local_path": "external/ietf/rfc/rfc9904.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "algorithms", "iana", "policy", "process"]
+    },
+    {
+      "id": "rfc9905",
+      "source": "ietf",
+      "class": "rfc",
+      "topic": "dnssec",
+      "title": "Deprecating the Use of SHA-1 in DNSSEC Signature Algorithms",
+      "authority": "IETF / RFC Editor",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc9905.txt",
+      "local_path": "external/ietf/rfc/rfc9905.txt",
+      "format": "text/plain",
+      "tags": ["dnssec", "algorithms", "sha1", "deprecation"]
+    },
+    {
+      "id": "iana-root-hints",
+      "source": "iana",
+      "class": "artifact",
+      "topic": "dns",
+      "title": "Root Name Server Hints",
+      "authority": "InterNIC / IANA ecosystem",
+      "source_url": "https://www.internic.net/domain/named.root",
+      "local_path": "external/iana/dns/artifacts/root.hints",
+      "format": "text/plain",
+      "tags": ["dns", "root", "hints", "runtime"]
+    },
+    {
+      "id": "iana-root-anchors-xml",
+      "source": "iana",
+      "class": "artifact",
+      "topic": "dnssec",
+      "title": "Root Trust Anchors XML",
+      "authority": "IANA",
+      "source_url": "https://data.iana.org/root-anchors/root-anchors.xml",
+      "local_path": "external/iana/dns/artifacts/root-anchors.xml",
+      "format": "application/xml",
+      "tags": ["dnssec", "trust-anchor", "runtime"]
+    },
+    {
+      "id": "iana-root-anchors-p7s",
+      "source": "iana",
+      "class": "artifact",
+      "topic": "dnssec",
+      "title": "Root Trust Anchors CMS Signature",
+      "authority": "IANA",
+      "source_url": "https://data.iana.org/root-anchors/root-anchors.p7s",
+      "local_path": "external/iana/dns/artifacts/root-anchors.p7s",
+      "format": "application/pkcs7-signature",
+      "tags": ["dnssec", "trust-anchor", "signature", "runtime"]
+    },
+    {
+      "id": "iana-icannbundle-pem",
+      "source": "iana",
+      "class": "artifact",
+      "topic": "x509",
+      "title": "ICANN Certificate Bundle for Root Anchor Verification",
+      "authority": "IANA / ICANN",
+      "source_url": "https://data.iana.org/root-anchors/icannbundle.pem",
+      "local_path": "external/iana/dns/artifacts/icannbundle.pem",
+      "format": "application/x-pem-file",
+      "tags": ["x509", "dnssec", "trust-anchor", "runtime"]
+    }
+  ]
+}
