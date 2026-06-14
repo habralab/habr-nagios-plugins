@@ -205,9 +205,13 @@ The current HTTP/TLS transport options are intended to converge in shared module
 
 Current direction:
 
+- shared build-time version formatting lives in `internal/core/buildinfo`
+- shared help-option structures and option-list rendering live in `internal/core/clihelp`
+- shared finding catalog entries, severity naming, and suppression metadata live in `internal/core/finding`
 - shared client construction lives in `internal/core/httpx`
 - shared redirect policy helpers live next to that module in `internal/core/httpx/redirects.go`
 - shared HTTP/TLS-related help text should live near that module
+- shared probe identity and naming helpers live in `internal/core/probemeta`
 - shared verbosity parsing and clamping live in `internal/core/verbosity`
 - shared target URL normalization and base-site derivation live in `internal/core/targeturl`
 - shared probe CLI helpers for program naming, timeout parsing, CSV parsing, and ignored-slug validation live in `internal/core/probecli`
