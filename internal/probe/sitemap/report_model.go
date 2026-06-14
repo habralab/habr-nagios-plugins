@@ -17,6 +17,7 @@ func (r *Result) reportView() *checkreport.Report {
 		PrimaryTarget: r.reportPrimaryTarget(),
 		Status:        r.reportStatus(),
 		Summary:       r.summaryMessage(),
+		StartedAt:     r.StartedAt,
 		Partial:       !r.hasReliableStats(),
 		DurationMS:    r.Perf.Elapsed.Milliseconds(),
 		Targets: []checkreport.Target{
@@ -28,6 +29,7 @@ func (r *Result) reportView() *checkreport.Report {
 		},
 		Meta: []checkreport.KV{
 			{Key: "discovered_via", Value: emptyAsDash(r.DiscoveredVia)},
+			{Key: "output_mode", Value: string(r.Config.OutputMode)},
 			{Key: "strict", Value: fmt.Sprintf("%t", r.Config.Strict)},
 			{Key: "allow_cross_host", Value: fmt.Sprintf("%t", r.Config.AllowCrossHost)},
 			{Key: "fallback_probe", Value: fmt.Sprintf("%t", r.Config.FallbackProbe)},
@@ -99,17 +101,6 @@ func (r *Result) summaryMessage() string {
 	if len(r.Problems) > 0 {
 		return r.primaryProblem().Message
 	}
-	if r.Config.Verbosity > 0 {
-		return fmt.Sprintf("discovery=%s entrypoints=%d sitemap_files=%d urls=%d depth=%d bytes_net=%d bytes_raw=%d",
-			r.DiscoveredVia,
-			len(r.Entrypoints),
-			len(r.Documents),
-			r.TotalURLs,
-			r.MaxObservedDepth,
-			r.Perf.TotalNetBytes,
-			r.Perf.TotalRawBytes,
-		)
-	}
 	return fmt.Sprintf("%d sitemap files, %d URLs, depth %d, net %d B, raw %d B",
 		len(r.Documents),
 		r.TotalURLs,
@@ -131,6 +122,7 @@ func (r *Result) makeTargetStage() checkreport.Stage {
 				State:   checkreport.CheckPass,
 				Subject: r.reportPrimaryTarget(),
 				Message: fmt.Sprintf("source=%s effective_base=%s hostname=%q url=%q entrypoint=%q", r.TargetSource, emptyAsDash(r.EffectiveBaseURL), r.Config.Hostname, r.Config.URL, r.Config.Entrypoint),
+				MinVerbosity: 1,
 			},
 		},
 	}
@@ -143,6 +135,7 @@ func (r *Result) makeDiscoveryStage() checkreport.Stage {
 		State:   checkreport.CheckPass,
 		Subject: r.reportPrimaryTarget(),
 		Message: fmt.Sprintf("method=%s entrypoints=%d", r.DiscoveredVia, len(r.Entrypoints)),
+		MinVerbosity: 1,
 	})
 	for _, line := range r.DiscoveryTrace {
 		checks = append(checks, checkreport.Check{
@@ -150,6 +143,7 @@ func (r *Result) makeDiscoveryStage() checkreport.Stage {
 			State:   checkreport.CheckNote,
 			Subject: r.reportPrimaryTarget(),
 			Message: line,
+			MinVerbosity: 1,
 		})
 	}
 	return checkreport.Stage{
@@ -162,9 +156,23 @@ func (r *Result) makeDiscoveryStage() checkreport.Stage {
 }
 
 func (r *Result) makeValidationStage() checkreport.Stage {
-	checks := make([]checkreport.Check, 0, len(r.Rules)+len(r.Entrypoints))
+	checks := make([]checkreport.Check, 0, len(r.Rules)+len(r.Entrypoints)+len(r.IgnoredProblems))
 	for i, rule := range r.Rules {
 		checks = append(checks, ruleToCheck(i, rule))
+	}
+	for i, problem := range r.IgnoredProblems {
+		checks = append(checks, checkreport.Check{
+			ID:      "problem." + problem.Code,
+			State:   checkreport.CheckIgnore,
+			Subject: problem.URL,
+			Message: problem.Message,
+			Meta: []checkreport.KV{
+				{Key: "order", Value: fmt.Sprintf("%06d", len(r.Rules)+i)},
+				{Key: "legacy_rule", Value: "true"},
+				{Key: "status", Value: "IGNORE"},
+				{Key: "name", Value: "problem." + problem.Code},
+			},
+		})
 	}
 	for _, ep := range r.Entrypoints {
 		checks = append(checks, checkreport.Check{
@@ -172,6 +180,7 @@ func (r *Result) makeValidationStage() checkreport.Stage {
 			State:   checkreport.CheckPass,
 			Subject: ep,
 			Message: ep,
+			MinVerbosity: 1,
 		})
 	}
 	return checkreport.Stage{
@@ -191,6 +200,7 @@ func (r *Result) makeDocumentsStage() checkreport.Stage {
 			State:   checkreport.CheckPass,
 			Subject: doc.URL,
 			Message: fmt.Sprintf("depth=%d kind=%s status=%d entries=%d children=%d encoding=%s gzip=%t url=%s", doc.Depth, doc.Kind, doc.StatusCode, doc.Entries, doc.Children, doc.Encoding, doc.Compressed, doc.URL),
+			MinVerbosity: 1,
 		})
 	}
 	return checkreport.Stage{
@@ -214,6 +224,7 @@ func (r *Result) makePerformanceStage() checkreport.Stage {
 				State:   checkreport.CheckNote,
 				Subject: r.reportPrimaryTarget(),
 				Message: fmt.Sprintf("elapsed=%s net_bytes=%d raw_bytes=%d heap_alloc_peak=%d heap_sys_peak=%d", r.Perf.Elapsed, r.Perf.TotalNetBytes, r.Perf.TotalRawBytes, r.Perf.PeakHeapAlloc, r.Perf.PeakHeapSys),
+				MinVerbosity: 1,
 			},
 		},
 	}
@@ -263,6 +274,7 @@ func makeHTTPTraces(calls []HTTPCall) []checkreport.TraceEvent {
 			Target:     call.URL,
 			Message:    httpTraceMessage(call),
 			Attributes: attrs,
+			MinVerbosity: 2,
 		})
 	}
 	return out

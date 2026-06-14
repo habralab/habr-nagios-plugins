@@ -2,7 +2,6 @@ package robots
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
@@ -18,6 +17,7 @@ func (r *Result) reportView() *checkreport.Report {
 		PrimaryTarget: r.finalTarget(),
 		Status:        reportStatusFromSeverity(r.maxSeverity()),
 		Summary:       r.summaryMessage(),
+		StartedAt:     r.StartedAt,
 		DurationMS:    r.Perf.Elapsed.Milliseconds(),
 		Targets: []checkreport.Target{
 			{Role: "source", Value: r.TargetSource},
@@ -30,6 +30,7 @@ func (r *Result) reportView() *checkreport.Report {
 			{Key: "absent", Value: fmt.Sprintf("%t", r.Absent)},
 			{Key: "content_type", Value: emptyAsDash(r.ContentType)},
 			{Key: "encoding", Value: emptyAsDash(r.Encoding)},
+			{Key: "output_mode", Value: string(r.Config.OutputMode)},
 			{Key: "behavior_profile", Value: string(r.Config.BehaviorProfile)},
 			{Key: "strict", Value: fmt.Sprintf("%t", r.Config.Strict)},
 		},
@@ -79,6 +80,7 @@ func (r *Result) makeTargetStage() checkreport.Stage {
 				State:   checkreport.CheckPass,
 				Subject: r.finalTarget(),
 				Message: targetSelectionTrace(r.Config, r.EffectiveBaseURL, r.EffectiveRobotsURL),
+				MinVerbosity: 1,
 				Meta: []checkreport.KV{
 					{Key: "source", Value: r.TargetSource},
 				},
@@ -92,6 +94,9 @@ func (r *Result) makeFetchStage() checkreport.Stage {
 	checks := make([]checkreport.Check, 0, len(r.Rules))
 	for i, rule := range r.Rules {
 		if !strings.HasPrefix(rule.Name, "robots.") {
+			continue
+		}
+		if rule.Name == "robots.groups" || rule.Name == "robots.parse" {
 			continue
 		}
 		checks = append(checks, ruleToCheck(i, rule))
@@ -114,6 +119,7 @@ func (r *Result) makeParseStage() checkreport.Stage {
 			State:   checkreport.CheckNote,
 			Subject: r.finalTarget(),
 			Message: "robots.txt not present, no directives parsed",
+			MinVerbosity: 1,
 		})
 		return checkreport.Stage{
 			ID:     "parse",
@@ -129,6 +135,7 @@ func (r *Result) makeParseStage() checkreport.Stage {
 		State:   checkreport.CheckPass,
 		Subject: r.finalTarget(),
 		Message: fmt.Sprintf("encoding=%s lines=%d groups=%d sitemaps=%d rules=%d", r.Encoding, r.RawLines, len(r.Groups), len(r.Sitemaps), r.ruleCount()),
+		MinVerbosity: 1,
 	})
 	for i, group := range r.Groups {
 		check := checkreport.Check{
@@ -136,6 +143,7 @@ func (r *Result) makeParseStage() checkreport.Stage {
 			State:   checkreport.CheckPass,
 			Subject: fmt.Sprintf("group %d", i+1),
 			Message: fmt.Sprintf("user_agents=%s allow=%d disallow=%d extensions=%d", strings.Join(group.UserAgents, ","), len(group.Allows), len(group.Disallows), len(group.Extensions)),
+			MinVerbosity: 1,
 		}
 		for _, ext := range group.Extensions {
 			check.Evidence = append(check.Evidence, directiveEvidence(ext))
@@ -148,6 +156,7 @@ func (r *Result) makeParseStage() checkreport.Stage {
 			State:   checkreport.CheckPass,
 			Subject: sitemap,
 			Message: fmt.Sprintf("sitemap=%s", sitemap),
+			MinVerbosity: 1,
 		})
 	}
 	for _, ext := range r.Extensions {
@@ -156,6 +165,7 @@ func (r *Result) makeParseStage() checkreport.Stage {
 			State:    checkreport.CheckPass,
 			Subject:  ext.Name,
 			Message:  fmt.Sprintf("extension=%s value=%q", ext.Name, ext.Value),
+			MinVerbosity: 1,
 			Evidence: []checkreport.Evidence{directiveEvidence(ext)},
 		})
 	}
@@ -165,6 +175,7 @@ func (r *Result) makeParseStage() checkreport.Stage {
 			State:   checkreport.CheckPass,
 			Subject: agent.Token,
 			Message: fmt.Sprintf("known_agent=%s vendor=%s kind=%s provenance=%s groups=%s count=%d", agent.Token, agent.Spec.Vendor, agent.Spec.Kind, agent.Spec.Provenance, strings.Join(agent.GroupNames, ","), agent.Count),
+			MinVerbosity: 1,
 			Evidence: []checkreport.Evidence{
 				{
 					Kind:    "agent",
@@ -299,6 +310,7 @@ func makeHTTPTraces(calls []HTTPCall) []checkreport.TraceEvent {
 			Target:     call.URL,
 			Message:    httpTraceMessage(call),
 			Attributes: attrs,
+			MinVerbosity: 2,
 		})
 	}
 	return out
@@ -441,31 +453,4 @@ func findingCatalogEntry(slug string) (entry struct{ Category string }, ok bool)
 		return entry, true
 	}
 	return entry, false
-}
-
-func legacyRuleChecks(stages []checkreport.Stage) []checkreport.Check {
-	var checks []checkreport.Check
-	for _, stage := range stages {
-		for _, check := range stage.Checks {
-			for _, item := range check.Meta {
-				if item.Key == "legacy_rule" && item.Value == "true" {
-					checks = append(checks, check)
-					break
-				}
-			}
-		}
-	}
-	sort.SliceStable(checks, func(i, j int) bool {
-		return metaValue(checks[i].Meta, "order") < metaValue(checks[j].Meta, "order")
-	})
-	return checks
-}
-
-func metaValue(meta []checkreport.KV, key string) string {
-	for _, item := range meta {
-		if item.Key == key {
-			return item.Value
-		}
-	}
-	return ""
 }

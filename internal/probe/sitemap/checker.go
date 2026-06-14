@@ -92,6 +92,7 @@ const (
 type Result struct {
 	Config           Config
 	Report           checkreport.Report
+	StartedAt        time.Time
 	Entrypoints      []string
 	Documents        []DocumentResult
 	Problems         []Problem
@@ -227,6 +228,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	result := &Result{
 		Config:          cfg,
+		StartedAt:       startedAt.UTC(),
 		CrossHostTrust:  map[string]bool{},
 		CrossHostChecks: map[string]crossHostCheck{},
 	}

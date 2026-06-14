@@ -3,6 +3,7 @@ package robots
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 )
 
 func TestRunOKWithSitemapAndPolicies(t *testing.T) {
@@ -39,6 +42,37 @@ func TestRunOKWithSitemapAndPolicies(t *testing.T) {
 	}
 	if got, want := len(result.Sitemaps), 1; got != want {
 		t.Fatalf("Sitemaps len = %d, want %d", got, want)
+	}
+}
+
+func TestReportViewIncludesStartedAtAndOutputMode(t *testing.T) {
+	startedAt := time.Date(2026, time.June, 14, 12, 0, 0, 0, time.UTC)
+	result := &Result{
+		Config: Config{
+			OutputMode: checkreport.OutputJSON,
+		},
+		StartedAt:          startedAt,
+		TargetSource:       "hostname",
+		EffectiveBaseURL:   "https://example.com/",
+		EffectiveRobotsURL: "https://example.com/robots.txt",
+		FinalURL:           "https://example.com/robots.txt",
+		StatusCode:         200,
+	}
+
+	data, err := result.reportView().JSON()
+	if err != nil {
+		t.Fatalf("JSON() error = %v", err)
+	}
+
+	var report checkreport.Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if report.StartedAt != startedAt {
+		t.Fatalf("report.StartedAt = %v, want %v", report.StartedAt, startedAt)
+	}
+	if got := checkreport.MetaValue(report.Meta, "output_mode", ""); got != string(checkreport.OutputJSON) {
+		t.Fatalf("output_mode = %q, want %q", got, checkreport.OutputJSON)
 	}
 }
 

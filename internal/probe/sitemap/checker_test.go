@@ -3,6 +3,7 @@ package sitemap
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 )
 
 func TestRunDiscoversEntrypointFromRobots(t *testing.T) {
@@ -44,6 +47,66 @@ func TestRunDiscoversEntrypointFromRobots(t *testing.T) {
 	}
 	if got := result.TotalURLs; got != 1 {
 		t.Fatalf("TotalURLs = %d, want 1", got)
+	}
+}
+
+func TestReportViewDoesNotDependOnVerbosityForIgnoredProblems(t *testing.T) {
+	startedAt := time.Date(2026, time.June, 14, 12, 0, 0, 0, time.UTC)
+	base := Result{
+		Config: Config{
+			OutputMode: checkreport.OutputJSON,
+		},
+		StartedAt:        startedAt,
+		TargetSource:     "hostname",
+		EffectiveBaseURL: "https://example.com/",
+		DiscoveredVia:    "robots",
+		Entrypoints:      []string{"https://example.com/sitemap.xml"},
+		IgnoredProblems: []Problem{{
+			Severity: SeverityWarning,
+			Code:     "fallback_used",
+			Message:  "sitemap discovered via fallback probing, robots.txt has no Sitemap directive",
+			URL:      "https://example.com/sitemap.xml",
+		}},
+	}
+
+	withLowVerbosity := base
+	withLowVerbosity.Config.Verbosity = 0
+	withHighVerbosity := base
+	withHighVerbosity.Config.Verbosity = 3
+
+	lowJSON, err := withLowVerbosity.reportView().JSON()
+	if err != nil {
+		t.Fatalf("low verbosity JSON() error = %v", err)
+	}
+	highJSON, err := withHighVerbosity.reportView().JSON()
+	if err != nil {
+		t.Fatalf("high verbosity JSON() error = %v", err)
+	}
+
+	if !bytes.Equal(lowJSON, highJSON) {
+		t.Fatalf("report JSON changed with verbosity\nlow=%s\nhigh=%s", lowJSON, highJSON)
+	}
+
+	var report checkreport.Report
+	if err := json.Unmarshal(lowJSON, &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	validation := checkreport.StageByID(&report, "validation")
+	if validation == nil {
+		t.Fatalf("validation stage missing")
+	}
+	var foundIgnored bool
+	for _, check := range validation.Checks {
+		if check.ID == "problem.fallback_used" && check.State == checkreport.CheckIgnore {
+			foundIgnored = true
+			break
+		}
+	}
+	if !foundIgnored {
+		t.Fatalf("validation stage checks = %#v, want ignored problem check", validation.Checks)
+	}
+	if report.StartedAt != startedAt {
+		t.Fatalf("report.StartedAt = %v, want %v", report.StartedAt, startedAt)
 	}
 }
 

@@ -13,17 +13,11 @@ func (r *Result) ExitCode() int {
 
 func (r *Result) Summary() string {
 	report := r.Report
-	var perfParts []string
-	for _, metric := range report.Metrics {
-		perfParts = append(perfParts, fmt.Sprintf("%s=%s", metric.Name, metric.DisplayValue()))
-	}
-	perfParts = append(perfParts, fmt.Sprintf("elapsed_ms=%d", report.DurationMS))
-
 	return fmt.Sprintf("%s - %s (%s) | %s",
 		report.NagiosLabel(),
 		report.Summary,
 		report.EffectiveTarget(),
-		strings.Join(perfParts, " "),
+		checkreport.Perfdata(&report, true),
 	)
 }
 
@@ -67,9 +61,13 @@ func (r *Result) Detail() string {
 			}
 		}
 	}
-	if verbosity >= 2 && len(r.Report.Traces) > 0 {
+	if verbosity >= 2 {
+		traces := checkreport.TracesForVerbosity(r.Report.Traces, verbosity)
+		if len(traces) == 0 {
+			goto findings
+		}
 		b.WriteString("Trace:\n")
-		for _, trace := range r.Report.Traces {
+		for _, trace := range traces {
 			fmt.Fprintf(&b, "  - kind=%s stage=%s state=%s target=%s message=%s\n",
 				trace.Kind,
 				emptyAsDash(trace.StageID),
@@ -82,6 +80,7 @@ func (r *Result) Detail() string {
 			}
 		}
 	}
+findings:
 	if len(r.Report.Findings) > 0 {
 		b.WriteString("Findings:\n")
 		for _, finding := range r.Report.Findings {

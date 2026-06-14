@@ -244,6 +244,7 @@ Current exception:
 - the intended contract is: collector/analyzer code produces structured stages, checks, findings, and metrics; renderers then emit Nagios-style text, JSON, or later external-consumer formats from the same report tree
 - the shared report model may also carry target sets, trace events, partial-coverage markers, and suppressed findings when that helps represent mature probe behavior without forcing probe-specific JSON schemas
 - the shared report model may also carry renderer hints on individual checks, such as `min_verbosity`, `aggregation_key`, and `aggregation_mode`, so text renderers can collapse repeated success noise without deleting atomic evidence from JSON output
+- shared renderer helpers may also cover trace filtering, legacy-rule extraction, stable report lookups, and perfdata formatting when those operations already have multiple probe consumers and still operate only on the shared report model
 
 Current renderer policy:
 

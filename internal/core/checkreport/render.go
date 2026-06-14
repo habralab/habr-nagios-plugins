@@ -57,6 +57,20 @@ func ChecksForVerbosity(checks []Check, verbosity int) []Check {
 	return out
 }
 
+func TracesForVerbosity(traces []TraceEvent, verbosity int) []TraceEvent {
+	if len(traces) == 0 {
+		return nil
+	}
+	out := make([]TraceEvent, 0, len(traces))
+	for _, trace := range traces {
+		if trace.MinVerbosity > verbosity {
+			continue
+		}
+		out = append(out, trace)
+	}
+	return out
+}
+
 func shouldAggregateCheck(check Check, verbosity int) bool {
 	if verbosity <= 0 || check.AggregationMode == AggregationNone {
 		return false

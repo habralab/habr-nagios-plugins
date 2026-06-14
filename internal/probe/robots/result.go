@@ -15,32 +15,32 @@ func (r *Result) ExitCode() int {
 
 func (r *Result) Summary() string {
 	report := r.reportView()
-	var perfParts []string
-	for _, metric := range report.Metrics {
-		perfParts = append(perfParts, fmt.Sprintf("%s=%s", metric.Name, metric.DisplayValue()))
-	}
-	perfParts = append(perfParts, fmt.Sprintf("elapsed_ms=%d", report.DurationMS))
-
 	return fmt.Sprintf("%s - %s (%s) | %s",
 		report.NagiosLabel(),
 		report.Summary,
 		report.EffectiveTarget(),
-		strings.Join(perfParts, " "),
+		checkreport.Perfdata(report, true),
 	)
 }
 
 func (r *Result) Detail() string {
 	report := r.reportView()
+	verbosity := r.Config.Verbosity
+	if verbosity < 1 {
+		verbosity = 1
+	}
 	var b strings.Builder
 
 	b.WriteString(r.Summary())
 	b.WriteByte('\n')
-	writeTargetSection(&b, report)
-	if len(report.Traces) > 0 {
-		writeHTTPSection(&b, report)
+	if verbosity > 0 {
+		writeTargetSection(&b, report, verbosity)
 	}
-	writeParsedSection(&b, report)
-	ruleChecks := legacyRuleChecks(report.Stages)
+	if len(report.Traces) > 0 {
+		writeHTTPSection(&b, report, verbosity)
+	}
+	writeParsedSection(&b, report, verbosity)
+	ruleChecks := checkreport.ChecksForVerbosity(checkreport.LegacyRuleChecks(report.Stages), verbosity)
 	if len(ruleChecks) > 0 {
 		writeRulesSection(&b, ruleChecks)
 	}
@@ -68,20 +68,28 @@ func ParseOutputMode(raw string) (checkreport.OutputMode, error) {
 	}
 }
 
-func writeTargetSection(b *strings.Builder, report *checkreport.Report) {
+func writeTargetSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	stage := checkreport.StageByID(report, "target")
+	if stage == nil || len(checkreport.ChecksForVerbosity(stage.Checks, verbosity)) == 0 {
+		return
+	}
 	b.WriteString("Target:\n")
 	fmt.Fprintf(b, "  - source=%s effective_base=%s requested=%s final=%s status=%s\n",
-		reportTargetValue(report, "source"),
-		reportTargetValue(report, "effective_base"),
-		reportTargetValue(report, "requested"),
-		reportTargetValue(report, "final"),
-		reportMetaValue(report.Meta, "status_code"),
+		checkreport.TargetValue(report, "source", "-"),
+		checkreport.TargetValue(report, "effective_base", "-"),
+		checkreport.TargetValue(report, "requested", "-"),
+		checkreport.TargetValue(report, "final", "-"),
+		checkreport.MetaValue(report.Meta, "status_code", "-"),
 	)
 }
 
-func writeHTTPSection(b *strings.Builder, report *checkreport.Report) {
+func writeHTTPSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	traces := checkreport.TracesForVerbosity(report.Traces, verbosity)
+	if len(traces) == 0 {
+		return
+	}
 	b.WriteString("HTTP:\n")
-	for _, trace := range report.Traces {
+	for _, trace := range traces {
 		if trace.Kind != "http" {
 			continue
 		}
@@ -89,13 +97,17 @@ func writeHTTPSection(b *strings.Builder, report *checkreport.Report) {
 	}
 }
 
-func writeParsedSection(b *strings.Builder, report *checkreport.Report) {
-	stage := reportStage(report, "parse")
+func writeParsedSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	stage := checkreport.StageByID(report, "parse")
 	if stage == nil {
 		return
 	}
+	checks := checkreport.ChecksForVerbosity(stage.Checks, verbosity)
+	if len(checks) == 0 {
+		return
+	}
 	b.WriteString("Parsed:\n")
-	for _, check := range stage.Checks {
+	for _, check := range checks {
 		switch check.ID {
 		case "parsed.absent":
 			fmt.Fprintf(b, "  - %s\n", check.Message)
@@ -126,7 +138,7 @@ func writeRulesSection(b *strings.Builder, checks []checkreport.Check) {
 	b.WriteString("Rules:\n")
 	for _, check := range checks {
 		fmt.Fprintf(b, "  - %s %s: %s [%s]\n",
-			legacyRuleStatus(check),
+			checkreport.LegacyRuleStatus(check),
 			check.ID,
 			check.Message,
 			emptyAsDash(check.Subject),
@@ -145,49 +157,6 @@ func writeFindingsSection(b *strings.Builder, title string, findings []checkrepo
 			continue
 		}
 		fmt.Fprintf(b, "  - %s %s: %s [%s]\n", prefix, finding.Code, finding.Message, emptyAsDash(finding.Target))
-	}
-}
-
-func reportStage(report *checkreport.Report, id string) *checkreport.Stage {
-	for i := range report.Stages {
-		if report.Stages[i].ID == id {
-			return &report.Stages[i]
-		}
-	}
-	return nil
-}
-
-func reportTargetValue(report *checkreport.Report, role string) string {
-	for _, target := range report.Targets {
-		if target.Role == role {
-			return target.Value
-		}
-	}
-	return "-"
-}
-
-func reportMetaValue(meta []checkreport.KV, key string) string {
-	for _, item := range meta {
-		if item.Key == key {
-			return item.Value
-		}
-	}
-	return "-"
-}
-
-func legacyRuleStatus(check checkreport.Check) string {
-	if value := metaValue(check.Meta, "status"); value != "" {
-		return value
-	}
-	switch check.State {
-	case checkreport.CheckCritical:
-		return "FAIL"
-	case checkreport.CheckWarning:
-		return "WARN"
-	case checkreport.CheckPass:
-		return "PASS"
-	default:
-		return "NOTE"
 	}
 }
 

@@ -107,6 +107,7 @@ type TraceEvent struct {
 	Target     string     `json:"target,omitempty"`
 	Message    string     `json:"message"`
 	Attributes []KV       `json:"attributes,omitempty"`
+	MinVerbosity int      `json:"min_verbosity,omitempty"`
 }
 
 type Metric struct {
