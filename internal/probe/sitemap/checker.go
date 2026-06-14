@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 )
@@ -41,6 +42,7 @@ type Config struct {
 	URL            string
 	Entrypoint     string
 	RobotsURL      string
+	OutputMode     checkreport.OutputMode
 	Strict         bool
 	FallbackProbe  bool
 	Verbosity      int
@@ -63,6 +65,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		FallbackProbe:  true,
+		OutputMode:     checkreport.OutputNagios,
 		Verbosity:      0,
 		FallbackStatus: string(FallbackWarn),
 		MaxDepth:       0,
@@ -88,6 +91,7 @@ const (
 
 type Result struct {
 	Config           Config
+	Report           checkreport.Report
 	Entrypoints      []string
 	Documents        []DocumentResult
 	Problems         []Problem

@@ -9,12 +9,15 @@ import (
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
 )
+
+var sitemapRun = sitemap.Run
 
 func Run(programName string, args []string) int {
 	binName := probecli.EffectiveProgramName(programName, sitemap.Meta.DefaultBinaryName())
@@ -48,10 +51,20 @@ func Run(programName string, args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	result, err := sitemap.Run(ctx, cfg)
+	result, err := sitemapRun(ctx, cfg)
 	if err != nil {
 		fmt.Printf("UNKNOWN - %v\n", err)
 		return sitemap.ExitUnknown
+	}
+
+	if cfg.OutputMode == checkreport.OutputJSON {
+		data, err := result.JSON()
+		if err != nil {
+			fmt.Printf("UNKNOWN - failed to encode JSON output: %v\n", err)
+			return sitemap.ExitUnknown
+		}
+		fmt.Println(string(data))
+		return result.ExitCode()
 	}
 
 	if cfg.Verbosity > 0 {
@@ -77,6 +90,7 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	var fallbackPaths string
 	var ignoreErrors string
 	var verbosityFlag int
+	var output string
 
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used for discovery, e.g. example.com")
@@ -84,6 +98,7 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	fs.StringVar(&cfg.URL, "url", "", "full base URL used for discovery, e.g. https://example.com")
 	fs.StringVar(&cfg.Entrypoint, "entrypoint", "", "explicit sitemap entrypoint URL")
 	fs.StringVar(&cfg.RobotsURL, "robots-url", "", "override robots.txt URL")
+	fs.StringVar(&output, "output", "nagios", "output mode: nagios|json")
 	fs.BoolVar(&cfg.Strict, "strict", false, "enforce stricter host/path expectations")
 	fs.BoolVar(&cfg.FallbackProbe, "fallback", true, "probe default sitemap locations when robots.txt has no sitemap")
 	fs.BoolVar(&cfg.AllowCrossHost, "allow-cross-host", false, "allow child sitemap URLs on hosts different from the parent sitemap host")
@@ -115,6 +130,10 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	}
 	cfg.Timeout = d
 	cfg.Verbosity = verbosity.Clamp(baseVerbosity + verbosityFlag)
+	cfg.OutputMode, err = sitemap.ParseOutputMode(output)
+	if err != nil {
+		return sitemap.Config{}, err
+	}
 
 	cfg.FallbackPaths = nil
 	for _, item := range strings.Split(fallbackPaths, ",") {
@@ -155,6 +174,17 @@ func printHelp(binName string) {
 			Examples: []string{
 				"--entrypoint https://example.com/sitemap.xml",
 				"--entrypoint https://example.com/sitemap.xml.gz",
+			},
+		},
+		{
+			Long: "--output",
+			Description: "Output mode.\n" +
+				"nagios emits classic monitoring text.\n" +
+				"json emits the structured sitemap waterfall report for external renderers.\n" +
+				"Default: nagios.",
+			Examples: []string{
+				"--output nagios",
+				"--output json",
 			},
 		},
 		{
