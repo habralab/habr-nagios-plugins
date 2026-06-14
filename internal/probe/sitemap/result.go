@@ -7,22 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 func (r *Result) ExitCode() int {
-	if r.hasTraversalLimitProblem() {
-		return ExitUnknown
-	}
-	switch r.maxSeverity() {
-	case SeverityCritical:
-		return ExitCritical
-	case SeverityWarning:
-		return ExitWarning
-	default:
-		return ExitOK
-	}
+	return r.reportView().ExitCode()
 }
 
 func (r *Result) Summary() string {
@@ -118,6 +109,10 @@ func (r *Result) Detail() string {
 		r.writeIgnoredProblemsSection(&b)
 	}
 	return b.String()
+}
+
+func (r *Result) JSON() ([]byte, error) {
+	return r.reportView().JSON()
 }
 
 func (r *Result) summaryPerfdata(partial bool) string {
@@ -268,6 +263,17 @@ func CatalogSlugs() []string {
 
 func CatalogEntries() []probecli.ErrorSlugDescriptor {
 	return finding.CatalogEntries()
+}
+
+func ParseOutputMode(raw string) (checkreport.OutputMode, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", string(checkreport.OutputNagios):
+		return checkreport.OutputNagios, nil
+	case string(checkreport.OutputJSON):
+		return checkreport.OutputJSON, nil
+	default:
+		return "", fmt.Errorf("invalid --output %q, expected nagios or json", raw)
+	}
 }
 
 func (r *Result) attachDocumentTiming(rawURL string, headersTime, readTime, parseTime, totalTime time.Duration, payload PayloadStats) {

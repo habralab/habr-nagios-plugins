@@ -2,10 +2,15 @@ package sitemapapp
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
 )
 
 const testProgramName = "check_sitemap"
@@ -23,6 +28,7 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 		"--max-files", "10",
 		"--max-urls", "20",
 		"--robots-url", "https://example.com/robots.txt",
+		"--output", "json",
 		"--user-agent", "custom-agent/1.0",
 		"--timeout", "30s",
 		"--verbose=2",
@@ -51,6 +57,9 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 	}
 	if got, want := cfg.Verbosity, 2; got != want {
 		t.Fatalf("Verbosity = %d, want %d", got, want)
+	}
+	if got, want := cfg.OutputMode, checkreport.OutputJSON; got != want {
+		t.Fatalf("OutputMode = %q, want %q", got, want)
 	}
 	if got, want := cfg.MaxDepth, 5; got != want {
 		t.Fatalf("MaxDepth = %d, want %d", got, want)
@@ -177,6 +186,7 @@ func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
 		"Use --list-error-slugs to see the available values.",
 		"When both --url and --hostname are provided, --url wins.",
 		"Escalate selected scope validation findings from warning to critical.",
+		"json emits the structured sitemap waterfall report for external renderers.",
 	}
 	for _, snippet := range wantSnippets {
 		if !strings.Contains(output, snippet) {
@@ -185,6 +195,55 @@ func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
 	}
 	if !strings.Contains(output, "check_habr_sitemap") {
 		t.Fatalf("Run() help output = %q, want installed binary name", output)
+	}
+}
+
+func TestRunJSONOutput(t *testing.T) {
+	originalRun := sitemapRun
+	t.Cleanup(func() { sitemapRun = originalRun })
+	sitemapRun = func(_ context.Context, cfg sitemap.Config) (*sitemap.Result, error) {
+		result := &sitemap.Result{
+			Config:           cfg,
+			TargetSource:     "hostname",
+			EffectiveBaseURL: "https://example.com/",
+			DiscoveredVia:    "robots",
+			Entrypoints:      []string{"https://example.com/sitemap.xml"},
+			Documents: []sitemap.DocumentResult{{
+				URL:        "https://example.com/sitemap.xml",
+				Kind:       "urlset",
+				StatusCode: 200,
+				Depth:      0,
+				Entries:    1,
+				Children:   0,
+				Encoding:   "utf-8",
+			}},
+			TotalURLs: 1,
+		}
+		result.Problems = []sitemap.Problem{{
+			Severity: sitemap.SeverityWarning,
+			Code:     "fallback_used",
+			Message:  "sitemap discovered via fallback probing, robots.txt has no Sitemap directive",
+			URL:      "https://example.com/sitemap.xml",
+		}}
+		return result, nil
+	}
+
+	exitCode, output := runWithCapturedStdout(t, testProgramName, []string{"-H", "example.com", "--output", "json"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	if got, want := report.Probe, "sitemap"; got != want {
+		t.Fatalf("report.Probe = %q, want %q", got, want)
+	}
+	if got, want := report.Status, checkreport.StatusWarning; got != want {
+		t.Fatalf("report.Status = %q, want %q", got, want)
+	}
+	if len(report.Findings) == 0 || report.Findings[0].Code != "fallback_used" {
+		t.Fatalf("report.Findings = %#v, want fallback_used", report.Findings)
 	}
 }
 

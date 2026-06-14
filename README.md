@@ -25,6 +25,7 @@ Experimental probe:
 - cross-submit verification through delegated `robots.txt` discovery on foreign hosts
 - UTF-8 and URL-escaping checks for text sitemap payloads
 - validation of sitemap extensions: `xhtml:hreflang`, `image:image`, `news:news`, and `video:video`
+- `json` output for the same structured waterfall report used by the probe internally
 - Debian packaging as `habr-nagios-plugin-sitemap`
 
 `check_robots` validates `robots.txt` availability and policy shape:
@@ -93,6 +94,7 @@ make build-debug
 ```bash
 ./build/check_sitemap -H example.com
 ./build/check_sitemap -H example.com -vv
+./build/check_sitemap -H example.com --output json
 ./build/check_sitemap --entrypoint https://example.com/sitemap.xml
 ./build/check_robots -H example.com
 ./build/check_robots --robots-url https://example.com/robots.txt --require-sitemap
