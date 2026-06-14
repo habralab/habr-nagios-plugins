@@ -257,6 +257,26 @@ func TestRunRejectsMissingTarget(t *testing.T) {
 	}
 }
 
+func TestRunRejectsMissingTargetAsJSON(t *testing.T) {
+	exitCode, output := runWithCapturedStdout(t, "check_sitemap", []string{"--output", "json"})
+	if exitCode != 3 {
+		t.Fatalf("Run() exitCode = %d, want 3", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	if got, want := report.Probe, "sitemap"; got != want {
+		t.Fatalf("report.Probe = %q, want %q", got, want)
+	}
+	if got, want := report.Status, checkreport.StatusUnknown; got != want {
+		t.Fatalf("report.Status = %q, want %q", got, want)
+	}
+	if !strings.Contains(report.Summary, "either -H/--hostname, -u/--url or --entrypoint is required") {
+		t.Fatalf("report.Summary = %q, want missing target message", report.Summary)
+	}
+}
+
 func TestRunRejectsInvalidFallbackStatus(t *testing.T) {
 	exitCode, output := runWithCapturedStdout(t, "check_sitemap", []string{"-H", "example.com", "--fallback-status", "critical"})
 	if exitCode != 3 {
@@ -264,6 +284,20 @@ func TestRunRejectsInvalidFallbackStatus(t *testing.T) {
 	}
 	if !strings.Contains(output, "UNKNOWN - fallback-status must be one of: ok, warn") {
 		t.Fatalf("Run() output = %q, want fallback-status error", output)
+	}
+}
+
+func TestRunRejectsInvalidFallbackStatusAsJSON(t *testing.T) {
+	exitCode, output := runWithCapturedStdout(t, "check_sitemap", []string{"-H", "example.com", "--fallback-status", "critical", "--output", "json"})
+	if exitCode != 3 {
+		t.Fatalf("Run() exitCode = %d, want 3", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	if !strings.Contains(report.Summary, "fallback-status must be one of: ok, warn") {
+		t.Fatalf("report.Summary = %q, want fallback-status error", report.Summary)
 	}
 }
 

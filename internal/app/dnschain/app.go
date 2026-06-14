@@ -16,10 +16,11 @@ import (
 
 func Run(programName string, args []string) int {
 	binName := probecli.EffectiveProgramName(programName, dnschain.Meta.DefaultBinaryName())
+	requestedOutputMode := probecli.DetectOutputMode(args)
 
 	cfg, showHelp, showVersion, err := parseFlags(binName, args)
 	if err != nil {
-		fmt.Printf("UNKNOWN - %v\n", err)
+		writeEarlyError(dnschain.Meta.Slug, "", requestedOutputMode, err)
 		return 3
 	}
 	if showVersion {
@@ -40,7 +41,7 @@ func Run(programName string, args []string) int {
 
 	result, err := dnschain.Run(ctx, cfg)
 	if err != nil {
-		fmt.Printf("UNKNOWN - %v\n", err)
+		writeEarlyError(dnschain.Meta.Slug, "", cfg.OutputMode, err)
 		return 3
 	}
 
@@ -60,6 +61,19 @@ func Run(programName string, args []string) int {
 		fmt.Println(result.Summary())
 	}
 	return result.ExitCode()
+}
+
+func writeEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) {
+	if outputMode == checkreport.OutputJSON {
+		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
+		if jsonErr == nil {
+			fmt.Println(string(data))
+			return
+		}
+		fmt.Printf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
+		return
+	}
+	fmt.Printf("UNKNOWN - %v\n", err)
 }
 
 func parseFlags(binName string, args []string) (dnschain.Config, bool, bool, error) {

@@ -3,6 +3,8 @@ package probecli
 import (
 	"strings"
 	"testing"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 )
 
 func TestEffectiveProgramNameFallsBack(t *testing.T) {
@@ -43,6 +45,17 @@ func TestRenderErrorSlugDescriptorsProducesTabularOutput(t *testing.T) {
 	} {
 		if !strings.Contains(out, snippet) {
 			t.Fatalf("RenderErrorSlugDescriptors() output missing %q in:\n%s", snippet, out)
+		}
+	}
+}
+
+func TestDetectOutputModeRecognizesJSON(t *testing.T) {
+	for _, args := range [][]string{
+		{"--output", "json"},
+		{"-H", "example.com", "--output=json"},
+	} {
+		if got, want := DetectOutputMode(args), checkreport.OutputJSON; got != want {
+			t.Fatalf("DetectOutputMode(%v) = %q, want %q", args, got, want)
 		}
 	}
 }

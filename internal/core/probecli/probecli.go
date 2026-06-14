@@ -7,6 +7,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 )
 
 type ErrorSlugDescriptor struct {
@@ -75,4 +77,25 @@ func emptyDescriptorField(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func DetectOutputMode(args []string) checkreport.OutputMode {
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" {
+			continue
+		}
+		if arg == "--output" && i+1 < len(args) {
+			if strings.EqualFold(strings.TrimSpace(args[i+1]), string(checkreport.OutputJSON)) {
+				return checkreport.OutputJSON
+			}
+			continue
+		}
+		if value, ok := strings.CutPrefix(arg, "--output="); ok {
+			if strings.EqualFold(strings.TrimSpace(value), string(checkreport.OutputJSON)) {
+				return checkreport.OutputJSON
+			}
+		}
+	}
+	return checkreport.OutputNagios
 }

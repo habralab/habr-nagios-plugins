@@ -21,10 +21,11 @@ var sitemapRun = sitemap.Run
 
 func Run(programName string, args []string) int {
 	binName := probecli.EffectiveProgramName(programName, sitemap.Meta.DefaultBinaryName())
+	requestedOutputMode := probecli.DetectOutputMode(args)
 
 	cfg, err := parseFlags(binName, args)
 	if err != nil {
-		fmt.Printf("UNKNOWN - %v\n", err)
+		writeEarlyError(sitemap.Meta.Slug, "", requestedOutputMode, err)
 		return sitemap.ExitUnknown
 	}
 
@@ -44,7 +45,7 @@ func Run(programName string, args []string) int {
 	}
 
 	if cfg.Hostname == "" && cfg.URL == "" && cfg.Entrypoint == "" {
-		fmt.Println("UNKNOWN - either -H/--hostname, -u/--url or --entrypoint is required")
+		writeEarlyError(sitemap.Meta.Slug, "", cfg.OutputMode, errors.New("either -H/--hostname, -u/--url or --entrypoint is required"))
 		return sitemap.ExitUnknown
 	}
 
@@ -53,7 +54,7 @@ func Run(programName string, args []string) int {
 
 	result, err := sitemapRun(ctx, cfg)
 	if err != nil {
-		fmt.Printf("UNKNOWN - %v\n", err)
+		writeEarlyError(sitemap.Meta.Slug, "", cfg.OutputMode, err)
 		return sitemap.ExitUnknown
 	}
 
@@ -74,6 +75,19 @@ func Run(programName string, args []string) int {
 	}
 
 	return result.ExitCode()
+}
+
+func writeEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) {
+	if outputMode == checkreport.OutputJSON {
+		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
+		if jsonErr == nil {
+			fmt.Println(string(data))
+			return
+		}
+		fmt.Printf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
+		return
+	}
+	fmt.Printf("UNKNOWN - %v\n", err)
 }
 
 func parseFlags(binName string, args []string) (sitemap.Config, error) {

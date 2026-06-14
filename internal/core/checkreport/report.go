@@ -170,3 +170,44 @@ func (m Metric) DisplayValue() string {
 	}
 	return strconv.FormatFloat(*m.Number, 'f', -1, 64)
 }
+
+func EarlyErrorReport(probe, target, summary string, outputMode OutputMode) Report {
+	report := Report{
+		Probe:         probe,
+		Target:        target,
+		PrimaryTarget: target,
+		Status:        StatusUnknown,
+		Summary:       summary,
+		StartedAt:     time.Now().UTC(),
+		Stages: []Stage{
+			{
+				ID:     "app.bootstrap",
+				Title:  "App Bootstrap",
+				Status: StatusUnknown,
+				Checks: []Check{
+					{
+						ID:      "bootstrap.error",
+						State:   CheckUnknown,
+						Subject: target,
+						Message: summary,
+					},
+				},
+			},
+		},
+		Findings: []Finding{
+			{
+				Code:     "bootstrap_error",
+				Severity: StatusUnknown,
+				Target:   target,
+				Message:  summary,
+			},
+		},
+		Meta: []KV{
+			{Key: "output_mode", Value: string(outputMode)},
+		},
+	}
+	if target == "" {
+		report.PrimaryTarget = ""
+	}
+	return report
+}

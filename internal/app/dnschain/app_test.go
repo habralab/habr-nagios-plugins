@@ -3,6 +3,7 @@ package dnschainapp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -139,6 +140,30 @@ func TestRunListErrorSlugs(t *testing.T) {
 		if !strings.Contains(output, snippet) {
 			t.Fatalf("Run() output missing %q in:\n%s", snippet, output)
 		}
+	}
+}
+
+func TestRunInvalidTimeoutAsJSON(t *testing.T) {
+	exitCode, output := runWithCapturedStdout(t, testProgramName, []string{
+		"-H", "www.example.com",
+		"--timeout", "bogus",
+		"--output", "json",
+	})
+	if exitCode != 3 {
+		t.Fatalf("Run() exitCode = %d, want 3", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	if got, want := report.Probe, "dnschain"; got != want {
+		t.Fatalf("report.Probe = %q, want %q", got, want)
+	}
+	if got, want := report.Status, checkreport.StatusUnknown; got != want {
+		t.Fatalf("report.Status = %q, want %q", got, want)
+	}
+	if !strings.Contains(report.Summary, "invalid --timeout") {
+		t.Fatalf("report.Summary = %q, want invalid timeout message", report.Summary)
 	}
 }
 
