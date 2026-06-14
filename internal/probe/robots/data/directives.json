@@ -1,0 +1,98 @@
+[
+  {
+    "name": "User-agent",
+    "class": "core",
+    "scope": "group",
+    "provenance": "rfc",
+    "reference": "RFC 9309",
+    "reference_url": "https://www.rfc-editor.org/rfc/rfc9309.html",
+    "description": "Core REP user-agent selector."
+  },
+  {
+    "name": "Allow",
+    "class": "core",
+    "scope": "group",
+    "provenance": "rfc",
+    "reference": "RFC 9309",
+    "reference_url": "https://www.rfc-editor.org/rfc/rfc9309.html",
+    "description": "Core REP allow rule."
+  },
+  {
+    "name": "Disallow",
+    "class": "core",
+    "scope": "group",
+    "provenance": "rfc",
+    "reference": "RFC 9309",
+    "reference_url": "https://www.rfc-editor.org/rfc/rfc9309.html",
+    "description": "Core REP disallow rule."
+  },
+  {
+    "name": "Sitemap",
+    "class": "extension",
+    "scope": "global",
+    "provenance": "ecosystem-doc",
+    "reference": "Google Search Central robots.txt introduction",
+    "reference_url": "https://developers.google.com/search/docs/crawling-indexing/robots/intro",
+    "description": "Widely supported sitemap discovery record."
+  },
+  {
+    "name": "Host",
+    "class": "extension",
+    "scope": "global",
+    "provenance": "observed",
+    "reference": "Legacy search-engine extension",
+    "description": "Legacy host canonicalization hint used by some crawlers."
+  },
+  {
+    "name": "Crawl-delay",
+    "class": "extension",
+    "scope": "group",
+    "provenance": "ecosystem-doc",
+    "reference": "Common Crawl FAQ",
+    "reference_url": "https://commoncrawl.org/faq",
+    "description": "Crawler-specific delay hint honored by some bots."
+  },
+  {
+    "name": "Clean-param",
+    "class": "extension",
+    "scope": "group",
+    "provenance": "vendor-doc",
+    "reference": "Yandex Webmaster Clean-param directive",
+    "reference_url": "https://yandex.com/support/webmaster/robot-workings/clean-param.html",
+    "description": "Yandex-specific query parameter canonicalization hint."
+  },
+  {
+    "name": "Request-rate",
+    "class": "extension",
+    "scope": "group",
+    "provenance": "vendor-doc",
+    "reference": "Seznam Search Help crawling control",
+    "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/",
+    "description": "SeznamBot request rate limit hint."
+  },
+  {
+    "name": "Visit-time",
+    "class": "extension",
+    "scope": "group",
+    "provenance": "observed",
+    "reference": "Observed in production robots.txt files",
+    "description": "Crawler-specific preferred visit window."
+  },
+  {
+    "name": "Noindex",
+    "class": "extension",
+    "scope": "group",
+    "provenance": "observed",
+    "reference": "Legacy search-engine extension",
+    "description": "Legacy crawler-specific noindex rule."
+  },
+  {
+    "name": "Content-Signal",
+    "class": "extension",
+    "scope": "global",
+    "provenance": "ecosystem-doc",
+    "reference": "Content Signals policy draft ecosystem",
+    "reference_url": "https://contentsignals.org/",
+    "description": "Emerging AI content usage preference signal."
+  }
+]

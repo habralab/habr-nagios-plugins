@@ -1,0 +1,278 @@
+[
+  {
+    "token": "DuckDuckBot",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "robots.txt via WWW::RobotRules",
+        "disposition": "obeys",
+        "reference": "DuckDuckGo Help Pages about DuckDuckBot",
+        "reference_url": "https://duckduckgo.com/duckduckbot",
+        "note": "DuckDuckGo states that DuckDuckBot respects WWW::RobotRules."
+      }
+    ]
+  },
+  {
+    "token": "Baiduspider",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "robots.txt",
+        "disposition": "obeys",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001"
+      },
+      {
+        "category": "matching",
+        "subject": "per-product user-agent rules",
+        "disposition": "supports",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+        "note": "Baidu documents different user-agent tokens for different products and shows per-agent robots.txt examples."
+      },
+      {
+        "category": "robots",
+        "subject": "robots.txt update delay",
+        "disposition": "limits",
+        "value": "usually 48 hours for updated restrictions to affect new indexing",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001"
+      }
+    ]
+  },
+  {
+    "token": "Baiduspider-image",
+    "claims": [
+      {
+        "category": "directive",
+        "subject": "Allow",
+        "disposition": "supports",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+        "note": "Baidu shows an example that blocks Baiduspider but allows Baiduspider-image to crawl /image/."
+      }
+    ]
+  },
+  {
+    "token": "Baiduspider-video",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "robots.txt records",
+        "disposition": "ignores",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+        "note": "Baidu explicitly notes that Baiduspider-video does not currently support the rules."
+      }
+    ]
+  },
+  {
+    "token": "Baiduspider-cpro",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "robots.txt records",
+        "disposition": "ignores",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+        "note": "Baidu states that Baiduspider-cpro does not work on the records set by robots.txt."
+      }
+    ]
+  },
+  {
+    "token": "Baiduspider-ads",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "robots.txt records",
+        "disposition": "ignores",
+        "reference": "Baidu Help Center FAQs of Baiduspider",
+        "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+        "note": "Baidu states that Baiduspider-ads does not work on the records set by robots.txt."
+      }
+    ]
+  },
+  {
+    "token": "MojeekBot",
+    "claims": [
+      {
+        "category": "directive",
+        "subject": "Crawl-delay",
+        "disposition": "ignores",
+        "reference": "MojeekBot webmaster page",
+        "reference_url": "https://www.mojeek.com/bot.html",
+        "note": "MojeekBot does not support the nonstandard robots.txt crawl-delay directive."
+      },
+      {
+        "category": "matching",
+        "subject": "User-agent record selection",
+        "disposition": "uses-first-match",
+        "reference": "MojeekBot webmaster page",
+        "reference_url": "https://www.mojeek.com/bot.html",
+        "note": "MojeekBot obeys the first record containing MojeekBot, otherwise the first * record."
+      },
+      {
+        "category": "matching",
+        "subject": "Disallow path matching",
+        "disposition": "matches-substring",
+        "reference": "MojeekBot webmaster page",
+        "reference_url": "https://www.mojeek.com/bot.html",
+        "note": "MojeekBot treats the disallowed string as a substring match."
+      },
+      {
+        "category": "meta-tag",
+        "subject": "noindex,nocache,nofollow",
+        "disposition": "obeys",
+        "reference": "MojeekBot webmaster page",
+        "reference_url": "https://www.mojeek.com/bot.html"
+      },
+      {
+        "category": "rate-limit",
+        "subject": "crawl frequency",
+        "disposition": "limits",
+        "value": "1 page per second",
+        "reference": "MojeekBot webmaster page",
+        "reference_url": "https://www.mojeek.com/bot.html"
+      }
+    ]
+  },
+  {
+    "token": "SeznamBot",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "robots.txt",
+        "disposition": "obeys",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/"
+      },
+      {
+        "category": "robots",
+        "subject": "missing robots.txt",
+        "disposition": "interprets-as-allow-all",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/",
+        "note": "The page states that an empty or nonexistent robots.txt has the same effect as unrestricted access."
+      },
+      {
+        "category": "directive",
+        "subject": "Allow",
+        "disposition": "supports",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/"
+      },
+      {
+        "category": "directive",
+        "subject": "wildcards * and $",
+        "disposition": "supports",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/"
+      },
+      {
+        "category": "directive",
+        "subject": "Request-rate",
+        "disposition": "supports",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/"
+      },
+      {
+        "category": "rate-limit",
+        "subject": "Request-rate minimum",
+        "disposition": "limits",
+        "value": "1 document per 10 seconds",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/"
+      },
+      {
+        "category": "directive",
+        "subject": "Sitemap",
+        "disposition": "supports",
+        "reference": "Seznam Search Help crawling control",
+        "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/crawling-control/"
+      }
+    ]
+  },
+  {
+    "token": "YandexBot",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "general robots.txt rules",
+        "disposition": "obeys",
+        "reference": "Yandex Webmaster robot verification guide",
+        "reference_url": "https://yandex.com/support/webmaster/en/robot-workings/check-yandex-robots.html",
+        "note": "The YandexBot row is marked as taking into account general robots.txt rules."
+      }
+    ]
+  },
+  {
+    "token": "YandexMobileBot",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "general robots.txt rules",
+        "disposition": "ignores",
+        "reference": "Yandex Webmaster robot verification guide",
+        "reference_url": "https://yandex.com/support/webmaster/en/robot-workings/check-yandex-robots.html",
+        "note": "The YandexMobileBot row is marked as not taking into account general robots.txt rules."
+      }
+    ]
+  },
+  {
+    "token": "Yeti",
+    "claims": [
+      {
+        "category": "robots",
+        "subject": "missing robots.txt",
+        "disposition": "interprets-as-allow-all",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots"
+      },
+      {
+        "category": "content-type",
+        "subject": "text/plain",
+        "disposition": "recommends",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots"
+      },
+      {
+        "category": "content-type",
+        "subject": "HTML robots.txt response",
+        "disposition": "may-treat-as-missing",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots"
+      },
+      {
+        "category": "http-status",
+        "subject": "2xx",
+        "disposition": "obeys",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots",
+        "note": "Naver states that it interprets and uses the rules when a normal 2xx response is returned."
+      },
+      {
+        "category": "redirect",
+        "subject": "3xx",
+        "disposition": "limits",
+        "value": "5 redirects",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots",
+        "note": "After more than five redirects Naver treats the file as allow-all."
+      },
+      {
+        "category": "http-status",
+        "subject": "4xx",
+        "disposition": "interprets-as-allow-all",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots"
+      },
+      {
+        "category": "http-status",
+        "subject": "5xx",
+        "disposition": "interprets-as-disallow-all",
+        "reference": "Naver Search Advisor robots.txt guide",
+        "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots"
+      }
+    ]
+  }
+]

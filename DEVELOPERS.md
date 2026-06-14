@@ -53,6 +53,11 @@ Internal flow:
 4. Findings are created through shared policy modules.
 5. Output is rendered as a compact summary or a more verbose diagnostic report.
 
+Current probes:
+
+- `sitemap`: discovery and validation of sitemap entrypoints, trees, and extension payloads
+- `robots`: availability, syntax, policy, and documented crawler-behavior checks for `robots.txt`
+
 ## Modular Direction
 
 The intended long-term shape is:
@@ -146,11 +151,22 @@ The current HTTP/TLS transport options are intended to converge in shared module
 Current direction:
 
 - shared client construction lives in `internal/core/httpx`
+- shared redirect policy helpers live next to that module in `internal/core/httpx/redirects.go`
 - shared HTTP/TLS-related help text should live near that module
+- shared verbosity parsing and clamping live in `internal/core/verbosity`
+- shared target URL normalization and base-site derivation live in `internal/core/targeturl`
+- shared probe CLI helpers for program naming, timeout parsing, CSV parsing, and ignored-slug validation live in `internal/core/probecli`
 - probe apps should aggregate shared and probe-local flags into one help output
 - shared options should appear in a stable order in CLI help
 - the default HTTP `User-Agent` should identify the whole tool family, not a single probe binary
 - the default HTTP `User-Agent` should expose only a release tag or `dev`, not branch names or commit hashes
+
+Practical rule for moving code into `internal/core`:
+
+- only move logic after a real second consumer appears
+- prefer tiny helpers with clear inputs and outputs over shared result/rendering frameworks
+- keep transport, target normalization, verbosity handling, and finding policy shared
+- keep probe-specific parsing, traversal, registries, and output semantics inside the probe package unless a third probe proves a stable abstraction
 
 ## Probe Identity And Naming
 

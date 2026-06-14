@@ -4,11 +4,14 @@ Small self-contained monitoring plugins for Nagios, Icinga, LibreNMS, and simila
 
 Repository: `https://github.com/habralab/habr-nagios-plugins`
 
-## Current Probe
+## Current Probes
 
-The first released probe is `check_sitemap`.
+Released probes:
 
-It validates sitemap discovery and sitemap tree integrity in a way that is useful for monitoring:
+- `check_sitemap`
+- `check_robots`
+
+`check_sitemap` validates sitemap discovery and sitemap tree integrity in a way that is useful for monitoring:
 
 - `OK`, `WARNING`, `CRITICAL`, and `UNKNOWN` exit codes
 - short Nagios-style summary output by default
@@ -19,6 +22,17 @@ It validates sitemap discovery and sitemap tree integrity in a way that is usefu
 - UTF-8 and URL-escaping checks for text sitemap payloads
 - validation of sitemap extensions: `xhtml:hreflang`, `image:image`, `news:news`, and `video:video`
 - Debian packaging as `habr-nagios-plugin-sitemap`
+
+`check_robots` validates `robots.txt` availability and policy shape:
+
+- `OK`, `WARNING`, `CRITICAL`, and `UNKNOWN` exit codes
+- short Nagios-style summary output by default
+- deeper diagnostics through `-v`, `-vv`, and `-vvv`
+- base URL or explicit `robots.txt` targeting
+- checks for syntax, duplicate or invalid `Sitemap:` directives, and empty payloads
+- built-in registry for core, well-known extension, and AI crawler tokens with provenance metadata
+- optional policy assertions such as required `Sitemap`, required `User-agent`, required `Disallow`, and forbidden `Disallow`
+- Debian packaging as `habr-nagios-plugin-robots`
 
 ## Goals
 
@@ -41,6 +55,12 @@ Default local output for the sitemap probe:
 build/check_sitemap
 ```
 
+Default local output for the robots probe:
+
+```bash
+build/check_robots
+```
+
 If you need a debug-friendlier local build with symbols intact:
 
 ```bash
@@ -53,12 +73,18 @@ make build-debug
 ./build/check_sitemap -H example.com
 ./build/check_sitemap -H example.com -vv
 ./build/check_sitemap --entrypoint https://example.com/sitemap.xml
+./build/check_robots -H example.com
+./build/check_robots --robots-url https://example.com/robots.txt --require-sitemap
+./build/check_robots -H example.com --behavior-profile vendor-aware -vv
+./build/check_robots --list-known-directives
+./build/check_robots --list-known-agents
 ```
 
-Installed Debian package payload:
+Installed Debian package payloads:
 
 ```bash
 /usr/lib/nagios/plugins/check_habr_sitemap
+/usr/lib/nagios/plugins/check_habr_robots
 ```
 
 ## Cross-build

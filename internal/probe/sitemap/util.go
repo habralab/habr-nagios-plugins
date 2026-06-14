@@ -2,10 +2,11 @@ package sitemap
 
 import (
 	"fmt"
-	"net/http"
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/habralab/habr-nagios-plugins/internal/core/targeturl"
 )
 
 func createsCycle(parentURL, childURL string, parents map[string]string) bool {
@@ -23,21 +24,7 @@ func createsCycle(parentURL, childURL string, parents map[string]string) bool {
 }
 
 func normalizeBaseSite(cfg Config) (string, error) {
-	if cfg.URL != "" {
-		u, err := normalizeURL(cfg.URL)
-		if err != nil {
-			return "", fmt.Errorf("invalid --url: %w", err)
-		}
-		parsed, _ := url.Parse(u)
-		parsed.Path = "/"
-		parsed.RawQuery = ""
-		parsed.Fragment = ""
-		return strings.TrimRight(parsed.String(), "/"), nil
-	}
-	if cfg.Hostname == "" {
-		return "", nil
-	}
-	return normalizeURL("https://" + strings.TrimSpace(cfg.Hostname))
+	return targeturl.BaseSite(cfg.URL, cfg.Hostname)
 }
 
 func targetSelectionTrace(cfg Config, baseSite string) string {
@@ -66,52 +53,8 @@ func targetSource(cfg Config) string {
 	}
 }
 
-func withTraceRedirects(client *http.Client, result *Result) *http.Client {
-	if client == nil {
-		return nil
-	}
-
-	cloned := *client
-	original := client.CheckRedirect
-	cloned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if result != nil && len(via) > 0 {
-			prev := via[len(via)-1]
-			status := 0
-			if req.Response != nil {
-				status = req.Response.StatusCode
-			}
-			result.HTTPTrace = append(result.HTTPTrace, HTTPCall{
-				Method:     prev.Method,
-				URL:        prev.URL.String(),
-				FinalURL:   req.URL.String(),
-				StatusCode: status,
-				Note:       "redirect",
-			})
-		}
-		if original != nil {
-			return original(req, via)
-		}
-		return nil
-	}
-	return &cloned
-}
-
 func normalizeURL(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", err
-	}
-	if u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("URL must be absolute: %q", raw)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("unsupported URL scheme %q", u.Scheme)
-	}
-	if u.Path == "" {
-		u.Path = "/"
-	}
-	u.Fragment = ""
-	return u.String(), nil
+	return targeturl.Normalize(raw)
 }
 
 func uniqueURLs(items []string) []string {

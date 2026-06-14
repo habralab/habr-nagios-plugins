@@ -49,7 +49,7 @@ func HelpOptions() []clihelp.Option {
 		},
 		{
 			Long:        "--user-agent",
-			Description: "Override the HTTP User-Agent header sent to robots.txt and sitemap documents.",
+			Description: "Override the HTTP User-Agent header sent by the probe's HTTP requests.",
 			Examples: []string{
 				fmt.Sprintf(`--user-agent "%s"`, DefaultUserAgent()),
 			},

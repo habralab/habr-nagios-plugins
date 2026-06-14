@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/probemeta"
+	"github.com/habralab/habr-nagios-plugins/internal/probe/robots"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
 )
 
@@ -12,6 +13,7 @@ type Probe struct {
 }
 
 var All = []Probe{
+	{Meta: robots.Meta},
 	{Meta: sitemap.Meta},
 }
 

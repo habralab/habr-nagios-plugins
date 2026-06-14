@@ -233,7 +233,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if baseSite != "" {
 		result.trustHost(baseSite)
 	}
-	client = withTraceRedirects(client, result)
+	client = httpx.CloneWithRedirectPolicy(client, httpx.DefaultMaxRedirects, func(method, fromURL, toURL string, statusCode int) {
+		result.HTTPTrace = append(result.HTTPTrace, HTTPCall{
+			Method:     method,
+			URL:        fromURL,
+			FinalURL:   toURL,
+			StatusCode: statusCode,
+			Note:       "redirect",
+		})
+	})
 	result.TargetSource = targetSource(cfg)
 	result.EffectiveBaseURL = baseSite
 	result.updateRuntimeStats()

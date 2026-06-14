@@ -6,19 +6,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
+	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
 )
 
 func Run(programName string, args []string) int {
-	binName := effectiveProgramName(programName)
+	binName := probecli.EffectiveProgramName(programName, sitemap.Meta.DefaultBinaryName())
 
 	cfg, err := parseFlags(binName, args)
 	if err != nil {
@@ -67,7 +66,7 @@ func Run(programName string, args []string) int {
 }
 
 func parseFlags(binName string, args []string) (sitemap.Config, error) {
-	normalizedArgs, baseVerbosity, err := normalizeVerbosityArgs(args)
+	normalizedArgs, baseVerbosity, err := verbosity.NormalizeArgs(args)
 	if err != nil {
 		return sitemap.Config{}, err
 	}
@@ -79,7 +78,7 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	var timeout string
 	var fallbackPaths string
 	var ignoreErrors string
-	var verbosity int
+	var verbosityFlag int
 
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used for discovery, e.g. example.com")
@@ -100,8 +99,8 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	fs.StringVar(&fallbackPaths, "fallback-paths", strings.Join(sitemap.DefaultFallbackPaths, ","), "comma-separated fallback paths")
 	fs.StringVar(&cfg.FallbackStatus, "fallback-status", string(sitemap.FallbackWarn), "severity when sitemap is resolved only via fallback: ok|warn")
 	fs.StringVar(&ignoreErrors, "ignore-errors", "", "comma-separated error slugs to suppress")
-	fs.IntVar(&verbosity, "v", 0, "verbosity level 0..3")
-	fs.IntVar(&verbosity, "verbose", 0, "verbosity level 0..3")
+	fs.IntVar(&verbosityFlag, "v", 0, "verbosity level 0..3")
+	fs.IntVar(&verbosityFlag, "verbose", 0, "verbosity level 0..3")
 	fs.BoolVar(&cfg.ShowHelp, "h", false, "show help")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "show help")
 	fs.BoolVar(&cfg.ShowErrorSlugs, "list-error-slugs", false, "list suppressible error slugs and exit")
@@ -112,12 +111,12 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 		return sitemap.Config{}, err
 	}
 
-	d, err := time.ParseDuration(timeout)
+	d, err := probecli.ParseTimeout(timeout, "--timeout")
 	if err != nil {
-		return sitemap.Config{}, fmt.Errorf("invalid --timeout: %w", err)
+		return sitemap.Config{}, err
 	}
 	cfg.Timeout = d
-	cfg.Verbosity = clampVerbosity(baseVerbosity + verbosity)
+	cfg.Verbosity = verbosity.Clamp(baseVerbosity + verbosityFlag)
 
 	cfg.FallbackPaths = nil
 	for _, item := range strings.Split(fallbackPaths, ",") {
@@ -137,74 +136,12 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 		return sitemap.Config{}, errors.New("fallback-status must be one of: ok, warn")
 	}
 
-	cfg.IgnoreErrorSet = map[string]bool{}
-	for _, item := range strings.Split(ignoreErrors, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if !sitemap.CatalogHasSlug(item) {
-			return sitemap.Config{}, fmt.Errorf("unknown ignored error slug %q", item)
-		}
-		cfg.IgnoreErrors = append(cfg.IgnoreErrors, item)
-		cfg.IgnoreErrorSet[item] = true
+	cfg.IgnoreErrors, cfg.IgnoreErrorSet, err = probecli.BuildIgnoreErrorSet(ignoreErrors, sitemap.CatalogHasSlug)
+	if err != nil {
+		return sitemap.Config{}, err
 	}
 
 	return cfg, nil
-}
-
-func normalizeVerbosityArgs(args []string) ([]string, int, error) {
-	out := make([]string, 0, len(args))
-	verbosity := 0
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "-v":
-			verbosity++
-		case arg == "-vv":
-			verbosity += 2
-		case arg == "-vvv":
-			verbosity += 3
-		case arg == "--verbose":
-			if i+1 < len(args) && isInteger(args[i+1]) {
-				n, _ := strconv.Atoi(args[i+1])
-				verbosity += n
-				i++
-				continue
-			}
-			verbosity++
-		case strings.HasPrefix(arg, "--verbose="):
-			raw := strings.TrimPrefix(arg, "--verbose=")
-			n, err := strconv.Atoi(raw)
-			if err != nil {
-				return nil, 0, fmt.Errorf("invalid --verbose value %q", raw)
-			}
-			verbosity += n
-		default:
-			out = append(out, arg)
-		}
-	}
-
-	return out, verbosity, nil
-}
-
-func isInteger(s string) bool {
-	if s == "" {
-		return false
-	}
-	_, err := strconv.Atoi(s)
-	return err == nil
-}
-
-func clampVerbosity(v int) int {
-	if v < 0 {
-		return 0
-	}
-	if v > 3 {
-		return 3
-	}
-	return v
 }
 
 func printHelp(binName string) {
@@ -304,12 +241,4 @@ Usage:
 
 Options:
 %s`, binName, sitemap.Meta.Summary, binName, binName, binName, clihelp.RenderOptions(options))
-}
-
-func effectiveProgramName(programName string) string {
-	name := strings.TrimSpace(filepath.Base(programName))
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		return sitemap.Meta.DefaultBinaryName()
-	}
-	return name
 }

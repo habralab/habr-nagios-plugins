@@ -1,0 +1,207 @@
+[
+  {
+    "token": "GPTBot",
+    "kind": "training",
+    "vendor": "OpenAI",
+    "provenance": "vendor-doc",
+    "reference": "OpenAI crawler overview",
+    "reference_url": "https://developers.openai.com/api/docs/bots",
+    "description": "OpenAI training crawler."
+  },
+  {
+    "token": "OAI-SearchBot",
+    "kind": "search",
+    "vendor": "OpenAI",
+    "provenance": "vendor-doc",
+    "reference": "OpenAI crawler overview",
+    "reference_url": "https://developers.openai.com/api/docs/bots",
+    "description": "OpenAI search crawler."
+  },
+  {
+    "token": "ChatGPT-User",
+    "kind": "user-triggered",
+    "vendor": "OpenAI",
+    "provenance": "vendor-doc",
+    "reference": "OpenAI crawler overview",
+    "reference_url": "https://developers.openai.com/api/docs/bots",
+    "description": "OpenAI user-triggered fetcher."
+  },
+  {
+    "token": "OAI-AdsBot",
+    "kind": "ads",
+    "vendor": "OpenAI",
+    "provenance": "vendor-doc",
+    "reference": "OpenAI crawler overview",
+    "reference_url": "https://developers.openai.com/api/docs/bots",
+    "description": "OpenAI ads landing-page validator."
+  },
+  {
+    "token": "Google-Extended",
+    "kind": "training",
+    "vendor": "Google",
+    "provenance": "vendor-doc",
+    "reference": "Google common crawlers",
+    "reference_url": "https://developers.google.com/crawling/docs/crawlers-fetchers/google-common-crawlers",
+    "description": "Google AI training and grounding control token."
+  },
+  {
+    "token": "DuckDuckBot",
+    "kind": "search",
+    "vendor": "DuckDuckGo",
+    "provenance": "vendor-doc",
+    "reference": "DuckDuckGo Help Pages about DuckDuckBot",
+    "reference_url": "https://duckduckgo.com/duckduckbot",
+    "description": "DuckDuckGo web crawler token."
+  },
+  {
+    "token": "Baiduspider",
+    "kind": "search",
+    "vendor": "Baidu",
+    "provenance": "vendor-doc",
+    "reference": "Baidu Help Center FAQs of Baiduspider",
+    "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+    "description": "Baidu web and mobile search crawler token."
+  },
+  {
+    "token": "Baiduspider-image",
+    "kind": "search",
+    "vendor": "Baidu",
+    "provenance": "vendor-doc",
+    "reference": "Baidu Help Center FAQs of Baiduspider",
+    "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+    "description": "Baidu image search crawler token."
+  },
+  {
+    "token": "Baiduspider-video",
+    "kind": "search",
+    "vendor": "Baidu",
+    "provenance": "vendor-doc",
+    "reference": "Baidu Help Center FAQs of Baiduspider",
+    "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+    "description": "Baidu video search crawler token."
+  },
+  {
+    "token": "Baiduspider-news",
+    "kind": "search",
+    "vendor": "Baidu",
+    "provenance": "vendor-doc",
+    "reference": "Baidu Help Center FAQs of Baiduspider",
+    "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+    "description": "Baidu news search crawler token."
+  },
+  {
+    "token": "Baiduspider-cpro",
+    "kind": "ads",
+    "vendor": "Baidu",
+    "provenance": "vendor-doc",
+    "reference": "Baidu Help Center FAQs of Baiduspider",
+    "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+    "description": "Baidu customer-agreement crawler token that is not indexed into search."
+  },
+  {
+    "token": "Baiduspider-ads",
+    "kind": "ads",
+    "vendor": "Baidu",
+    "provenance": "vendor-doc",
+    "reference": "Baidu Help Center FAQs of Baiduspider",
+    "reference_url": "https://help.baidu.com/question?prod_en=master&class=476&id=3001",
+    "description": "Baidu business search crawler token that is not indexed into search."
+  },
+  {
+    "token": "CCBot",
+    "kind": "archive",
+    "vendor": "Common Crawl",
+    "provenance": "ecosystem-doc",
+    "reference": "Common Crawl CCBot",
+    "reference_url": "https://commoncrawl.org/ccbot",
+    "description": "Common Crawl crawler token."
+  },
+  {
+    "token": "SeznamBot",
+    "kind": "search",
+    "vendor": "Seznam",
+    "provenance": "vendor-doc",
+    "reference": "Seznam Search Help SeznamBot crawler",
+    "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/seznambot-crawler/",
+    "description": "Seznam search crawler token."
+  },
+  {
+    "token": "Yeti",
+    "kind": "search",
+    "vendor": "Naver",
+    "provenance": "vendor-doc",
+    "reference": "Naver Search Advisor robots.txt guide",
+    "reference_url": "https://searchadvisor.naver.com/guide/seo-basic-robots",
+    "description": "Naver search crawler token."
+  },
+  {
+    "token": "YandexBot",
+    "kind": "search",
+    "vendor": "Yandex",
+    "provenance": "vendor-doc",
+    "reference": "Yandex Webmaster robot verification guide",
+    "reference_url": "https://yandex.com/support/webmaster/en/robot-workings/check-yandex-robots.html",
+    "description": "Yandex main indexing crawler token."
+  },
+  {
+    "token": "YandexMobileBot",
+    "kind": "search",
+    "vendor": "Yandex",
+    "provenance": "vendor-doc",
+    "reference": "Yandex Webmaster robot verification guide",
+    "reference_url": "https://yandex.com/support/webmaster/en/robot-workings/check-yandex-robots.html",
+    "description": "Yandex mobile-layout crawler token."
+  },
+  {
+    "token": "YandexAdditionalBot",
+    "kind": "search",
+    "vendor": "Yandex",
+    "provenance": "vendor-doc",
+    "reference": "Yandex Webmaster robot verification guide",
+    "reference_url": "https://yandex.com/support/webmaster/en/robot-workings/check-yandex-robots.html",
+    "description": "Yandex AI-response crawler token that helps process robots.txt for Search with Yandex AI."
+  },
+  {
+    "token": "YandexAdditional",
+    "kind": "search",
+    "vendor": "Yandex",
+    "provenance": "vendor-doc",
+    "reference": "Yandex Webmaster robot verification guide",
+    "reference_url": "https://yandex.com/support/webmaster/en/robot-workings/check-yandex-robots.html",
+    "description": "Yandex AI-response crawler token alias for Search with Yandex AI."
+  },
+  {
+    "token": "MojeekBot",
+    "kind": "search",
+    "vendor": "Mojeek",
+    "provenance": "vendor-doc",
+    "reference": "MojeekBot webmaster page",
+    "reference_url": "https://www.mojeek.com/bot.html",
+    "description": "Mojeek search crawler token."
+  },
+  {
+    "token": "FreshBot",
+    "kind": "search",
+    "vendor": "Seznam",
+    "provenance": "vendor-doc",
+    "reference": "Seznam Search Help SeznamBot crawler",
+    "reference_url": "https://o-seznam.cz/napoveda/vyhledavani/en/seznambot-crawler/",
+    "description": "Seznam fast crawler for fresh content and RSS feeds."
+  },
+  {
+    "token": "Applebot-Extended",
+    "kind": "training",
+    "vendor": "Apple",
+    "provenance": "third-party",
+    "reference": "Public reporting on Applebot-Extended",
+    "description": "Apple AI training control token."
+  },
+  {
+    "token": "ClaudeBot",
+    "kind": "training",
+    "vendor": "Anthropic",
+    "provenance": "third-party",
+    "reference": "Public reporting on ClaudeBot",
+    "description": "Anthropic crawler token seen in production."
+  }
+]
