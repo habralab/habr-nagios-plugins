@@ -213,3 +213,41 @@ func TestResolverResolveAuthoritativeCachesByServerSet(t *testing.T) {
 		t.Fatalf("calls after different server set = %d, want 2", calls)
 	}
 }
+
+func TestResolverLookupUsesSOAOwnerAsFinalZone(t *testing.T) {
+	r := NewResolver(0)
+	r.iterativeFn = func(_ context.Context, qname string, qtype uint16) (*iterativeResult, error) {
+		msg := &dns.Msg{
+			Ns: []dns.RR{
+				&dns.SOA{
+					Hdr:     dns.RR_Header{Name: "www.cloudflare.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 1800},
+					Ns:      "jule.ns.cloudflare.com.",
+					Mbox:    "dns.cloudflare.com.",
+					Serial:  1,
+					Refresh: 10000,
+					Retry:   2400,
+					Expire:  604800,
+					Minttl:  1800,
+				},
+			},
+		}
+		return &iterativeResult{
+			Response: exchangeResult{Msg: msg},
+			Hops: []delegationHop{{
+				ToZone:       "cloudflare.com.",
+				ChildServers: []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+			}},
+		}, nil
+	}
+	r.validateFn = func(_ context.Context, zone string, _ []nsAddr) (SecurityState, []*dns.DNSKEY, string, error) {
+		if zone != "www.cloudflare.com." {
+			t.Fatalf("zone = %q, want www.cloudflare.com.", zone)
+		}
+		return SecuritySecure, nil, "stub", nil
+	}
+
+	_, err := r.Lookup(context.Background(), "_443._tcp.www.cloudflare.com.", dns.TypeTLSA)
+	if err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+}

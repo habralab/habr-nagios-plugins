@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
-	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 )
 
@@ -80,15 +79,6 @@ func DefaultConfig() Config {
 	}
 }
 
-type Severity = finding.Severity
-type Problem = finding.Problem
-
-const (
-	SeverityOK       = finding.SeverityOK
-	SeverityWarning  = finding.SeverityWarning
-	SeverityCritical = finding.SeverityCritical
-)
-
 type Result struct {
 	Config           Config
 	Report           checkreport.Report
@@ -97,7 +87,7 @@ type Result struct {
 	Documents        []DocumentResult
 	Problems         []Problem
 	IgnoredProblems  []Problem
-	Rules            []RuleCheck
+	RuleChecks       []checkreport.Check
 	DiscoveryTrace   []string
 	HTTPTrace        []HTTPCall
 	DiscoveredVia    string
@@ -125,13 +115,6 @@ type DocumentResult struct {
 	Children   int
 	Encoding   string
 	Compressed bool
-}
-
-type RuleCheck struct {
-	Status string
-	Name   string
-	Target string
-	Detail string
 }
 
 type PerfStats struct {

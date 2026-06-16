@@ -1,0 +1,42 @@
+package msgcatalog
+
+func SitemapEnglishSource() Source {
+	return Source{
+		Name:            "probe/sitemap",
+		AllowedPrefixes: []string{"sitemap_"},
+		Items: map[Key]Message{
+			"sitemap_entrypoint_not_found":       {Summary: "no sitemap entrypoint discovered"},
+			"sitemap_check_timeout":              {Summary: "check timeout"},
+			"sitemap_max_files_exceeded":         {Summary: "reached max sitemap files limit"},
+			"sitemap_max_depth_exceeded":         {Summary: "sitemap depth exceeds limit"},
+			"sitemap_max_urls_exceeded":          {Summary: "parsed URL count exceeds limit"},
+			"sitemap_cycle_detected":             {Summary: "cyclic sitemap reference detected"},
+			"sitemap_duplicate_child":            {Summary: "duplicate child sitemap reference"},
+			"sitemap_invalid_entrypoint":         {Summary: "invalid sitemap entrypoint"},
+			"sitemap_fallback_probe_failed":      {Summary: "fallback probe failed"},
+			"sitemap_fallback_used":              {Summary: "sitemap discovered via fallback probing, robots.txt has no Sitemap directive"},
+			"sitemap_fetch_failed":               {Summary: "document fetch failed"},
+			"sitemap_fetch_timeout":              {Summary: "document fetch timeout"},
+			"sitemap_bad_status":                 {Summary: "unexpected HTTP status"},
+			"sitemap_content_type_unexpected":    {Summary: "unexpected content type"},
+			"sitemap_child_scope_invalid":        {Summary: "child sitemap scope invalid"},
+			"sitemap_unsupported_format":         {Summary: "unsupported sitemap document format"},
+			"sitemap_empty_document":             {Summary: "empty sitemap document"},
+			"sitemap_entry_limit_exceeded":       {Summary: "sitemap entry limit exceeded"},
+			"sitemap_missing_loc":                {Summary: "required loc value missing"},
+			"sitemap_invalid_loc":                {Summary: "invalid loc value"},
+			"sitemap_invalid_url":                {Summary: "invalid URL value"},
+			"sitemap_url_not_escaped":            {Summary: "URL contains characters that should be escaped"},
+			"sitemap_url_scope_invalid":          {Summary: "URL violates sitemap location scope"},
+			"sitemap_extension_hreflang_invalid": {Summary: "hreflang sitemap extension is invalid"},
+			"sitemap_extension_image_invalid":    {Summary: "image sitemap extension is invalid"},
+			"sitemap_extension_news_invalid":     {Summary: "news sitemap extension is invalid"},
+			"sitemap_extension_video_invalid":    {Summary: "video sitemap extension is invalid"},
+			"sitemap_non_utf8_encoding":          {Summary: "sitemap uses non-UTF-8 encoding"},
+			"sitemap_xml_parse_failed":           {Summary: "XML sitemap parse failed"},
+			"sitemap_text_parse_failed":          {Summary: "text sitemap parse failed"},
+			"sitemap_empty_urlset":               {Summary: "urlset contains no URLs"},
+			"sitemap_empty_text_sitemap":         {Summary: "text sitemap contains no URLs"},
+		},
+	}
+}

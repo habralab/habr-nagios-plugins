@@ -2,15 +2,10 @@ package dnschainapp
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"io"
 
-	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
-	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
-	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/dnschain"
 )
 
@@ -18,22 +13,18 @@ func Run(programName string, args []string) int {
 	binName := probecli.EffectiveProgramName(programName, dnschain.Meta.DefaultBinaryName())
 	requestedOutputMode := probecli.DetectOutputMode(args)
 
-	cfg, showHelp, showVersion, err := parseFlags(binName, args)
+	cfg, err := parseFlags(binName, args)
 	if err != nil {
-		writeEarlyError(dnschain.Meta.Slug, "", requestedOutputMode, err)
+		fmt.Print(probecli.RenderEarlyError(dnschain.Meta.Slug, "", requestedOutputMode, err))
 		return 3
 	}
-	if showVersion {
-		fmt.Println(buildinfo.String(binName))
-		return 0
-	}
-	if cfg.ShowErrorSlugs {
-		fmt.Print(probecli.RenderErrorSlugDescriptors(dnschain.CatalogEntries()))
-		return 0
-	}
-	if showHelp {
-		printHelp(binName)
-		return 0
+	if output, exitCode, handled := probecli.DispatchToggleActions(
+		probecli.VersionAction(binName, cfg.ShowVersion, 0),
+		probecli.ToggleAction{Enabled: cfg.ShowErrorSlugs, Output: probecli.RenderErrorSlugDescriptors(dnschain.CatalogEntries()), ExitCode: 0},
+		probecli.ToggleAction{Enabled: cfg.ShowHelp, Output: renderHelp(binName), ExitCode: 0},
+	); handled {
+		fmt.Print(output)
+		return exitCode
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
@@ -41,101 +32,67 @@ func Run(programName string, args []string) int {
 
 	result, err := dnschain.Run(ctx, cfg)
 	if err != nil {
-		writeEarlyError(dnschain.Meta.Slug, "", cfg.OutputMode, err)
+		fmt.Print(probecli.RenderEarlyError(dnschain.Meta.Slug, "", cfg.OutputMode, err))
 		return 3
 	}
 
-	if cfg.OutputMode == checkreport.OutputJSON {
-		data, err := result.JSON()
-		if err != nil {
-			fmt.Printf("UNKNOWN - failed to encode JSON output: %v\n", err)
-			return 3
-		}
-		fmt.Println(string(data))
-		return result.ExitCode()
-	}
-
-	if cfg.Verbosity > 0 {
-		fmt.Print(result.Detail())
-	} else {
-		fmt.Println(result.Summary())
-	}
-	return result.ExitCode()
-}
-
-func writeEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) {
-	if outputMode == checkreport.OutputJSON {
-		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
-		if jsonErr == nil {
-			fmt.Println(string(data))
-			return
-		}
-		fmt.Printf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
-		return
-	}
-	fmt.Printf("UNKNOWN - %v\n", err)
-}
-
-func parseFlags(binName string, args []string) (dnschain.Config, bool, bool, error) {
-	normalizedArgs, baseVerbosity, err := verbosity.NormalizeArgs(args)
+	rendered, exitCode, err := probecli.RenderResult(result, cfg.OutputMode, cfg.Verbosity)
 	if err != nil {
-		return dnschain.Config{}, false, false, err
+		fmt.Printf("UNKNOWN - %v\n", err)
+		return 3
 	}
+	fmt.Print(rendered)
+	return exitCode
+}
 
-	fs := flag.NewFlagSet(binName, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+func parseFlags(binName string, args []string) (dnschain.Config, error) {
+	fs, common, err := probecli.NewCommonFlagSet(binName, args)
+	if err != nil {
+		return dnschain.Config{}, err
+	}
 
 	cfg := dnschain.DefaultConfig()
-	var timeout string
 	var queryTimeout string
-	var output string
-	var ignoreErrors string
-	var verbosityFlag int
-	var showHelp bool
-	var showVersion bool
 
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used as the DNS target")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used as the DNS target")
 	fs.StringVar(&cfg.Zone, "zone", "", "explicit DNS zone target")
-	fs.StringVar(&timeout, "t", "60s", "overall timeout")
-	fs.StringVar(&timeout, "timeout", "60s", "overall timeout")
 	fs.StringVar(&queryTimeout, "query-timeout", "3s", "per DNS query timeout")
-	fs.StringVar(&output, "output", "nagios", "output mode: nagios|json")
-	fs.StringVar(&ignoreErrors, "ignore-errors", "", "comma-separated error slugs to suppress")
-	fs.IntVar(&verbosityFlag, "v", 0, "verbosity level 0..3")
-	fs.IntVar(&verbosityFlag, "verbose", 0, "verbosity level 0..3")
-	fs.BoolVar(&showHelp, "h", false, "show help")
-	fs.BoolVar(&showHelp, "help", false, "show help")
-	fs.BoolVar(&cfg.ShowErrorSlugs, "list-error-slugs", false, "list suppressible error slugs and exit")
-	fs.BoolVar(&showVersion, "V", false, "show version")
-	fs.BoolVar(&showVersion, "version", false, "show version")
+	common.Register(fs, "60s")
 
-	if err := fs.Parse(normalizedArgs); err != nil {
-		return dnschain.Config{}, false, false, err
+	if err := fs.Parse(common.Args()); err != nil {
+		return dnschain.Config{}, err
 	}
 
-	cfg.Timeout, err = probecli.ParseTimeout(timeout, "--timeout")
+	resolved, err := common.Resolve(dnschain.CatalogHasSlug)
 	if err != nil {
-		return dnschain.Config{}, false, false, err
+		return dnschain.Config{}, err
 	}
+	cfg.Timeout = resolved.Timeout
+	cfg.OutputMode = resolved.OutputMode
+	cfg.Verbosity = resolved.Verbosity
+	cfg.IgnoreErrors = resolved.IgnoreErrors
+	cfg.IgnoreErrorSet = resolved.IgnoreErrorSet
+	cfg.ShowHelp = resolved.ShowHelp
+	cfg.ShowVersion = resolved.ShowVersion
+	cfg.ShowErrorSlugs = resolved.ShowErrorSlugs
 	cfg.QueryTimeout, err = probecli.ParseTimeout(queryTimeout, "--query-timeout")
 	if err != nil {
-		return dnschain.Config{}, false, false, err
-	}
-	cfg.OutputMode, err = dnschain.ParseOutputMode(output)
-	if err != nil {
-		return dnschain.Config{}, false, false, err
-	}
-	cfg.Verbosity = verbosity.Clamp(baseVerbosity + verbosityFlag)
-	cfg.IgnoreErrors, cfg.IgnoreErrorSet, err = probecli.BuildIgnoreErrorSet(ignoreErrors, dnschain.CatalogHasSlug)
-	if err != nil {
-		return dnschain.Config{}, false, false, err
+		return dnschain.Config{}, err
 	}
 
-	return cfg, showHelp, showVersion, nil
+	return cfg, nil
 }
 
-func printHelp(binName string) {
+func renderHelp(binName string) string {
+	doc := clihelp.Document{
+		ProgramName: binName,
+		Summary:     dnschain.Meta.Summary,
+		Usage: []string{
+			binName + " -H www.example.com [options]",
+			binName + " --zone example.com [options]",
+		},
+	}
 	options := []clihelp.Option{
 		{
 			Short: "-H",
@@ -156,11 +113,8 @@ func printHelp(binName string) {
 			},
 		},
 		{
-			Long: "--output",
-			Description: "Output mode.\n" +
-				"nagios emits classic monitoring text.\n" +
-				"json emits the structured waterfall report for external renderers.\n" +
-				"Default: nagios.",
+			Long:        "--output",
+			Description: probecli.OutputModeOptionDescription("json emits the structured waterfall report for external renderers."),
 			Examples: []string{
 				"--output nagios",
 				"--output json",
@@ -178,28 +132,18 @@ func printHelp(binName string) {
 			},
 		},
 		{
-			Long: "--ignore-errors",
-			Description: "Comma-separated finding slugs to suppress from status aggregation.\n" +
-				"Use --list-error-slugs to see the available values.",
+			Long:        "--ignore-errors",
+			Description: probecli.IgnoreErrorsOptionDescription(),
 			Examples: []string{
 				"--ignore-errors dnschain_child_soa_inconsistent,dnschain_nsec3param_not_recommended",
 			},
 		},
-		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs with category, default severity, and message, then exit."},
-		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 60s.", Examples: []string{"-t 60s", "--timeout 120s"}},
-		{Short: "-v", Long: "--verbose", Description: "Increase output detail.\nRepeat up to 3 times for deeper diagnostics.", Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
-		{Short: "-h", Long: "--help", Description: "Show help"},
-		{Short: "-V", Long: "--version", Description: "Show version and build metadata"},
+		{Long: "--list-error-slugs", Description: probecli.ListErrorSlugsOptionDescription()},
+		{Short: "-t", Long: "--timeout", Description: probecli.TimeoutOptionDescription("60s"), Examples: []string{"-t 60s", "--timeout 120s"}},
+		{Short: "-v", Long: "--verbose", Description: probecli.VerboseOptionDescription(), Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
+		{Short: "-h", Long: "--help", Description: probecli.HelpOptionDescription()},
+		{Short: "-V", Long: "--version", Description: probecli.VersionOptionDescription()},
 	}
-
-	fmt.Printf(`%s
-
-%s
-
-Usage:
-  %s -H www.example.com [options]
-  %s --zone example.com [options]
-
-Options:
-%s`, binName, dnschain.Meta.Summary, binName, binName, clihelp.RenderOptions(options))
+	doc.Options = options
+	return clihelp.RenderDocument(doc)
 }

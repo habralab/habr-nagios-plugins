@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -81,6 +82,8 @@ func exchangeDNS(ctx context.Context, server, qname string, qtype uint16, do boo
 	}, nil
 }
 
+type dnsExchangeFunc func(context.Context, string, string, uint16, bool) (*exchangeResult, error)
+
 func withDNSQueryTimeout(ctx context.Context, timeout time.Duration) context.Context {
 	if timeout <= 0 {
 		timeout = defaultDNSQueryTimeout
@@ -106,21 +109,44 @@ func dnsQueryTimeoutFromContext(ctx context.Context) time.Duration {
 }
 
 func queryAny(ctx context.Context, servers []nsAddr, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+	return queryAnyWithExchanger(ctx, servers, qname, qtype, do, resolveExchangeFn)
+}
+
+func queryAnyWithExchanger(ctx context.Context, servers []nsAddr, qname string, qtype uint16, do bool, exchanger dnsExchangeFunc) (*exchangeResult, error) {
 	if caps, ok := resolverFamilyConstraintsFromContext(ctx); ok {
 		servers = filterNSAddrsByCapabilities(servers, caps)
 	}
-	var errs []string
+	if len(servers) == 0 {
+		return nil, errors.New("no authoritative servers available")
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type outcome struct {
+		result *exchangeResult
+		server nsAddr
+		err    error
+	}
+	results := make(chan outcome, len(servers))
 	for _, server := range servers {
-		res, err := exchangeDNS(ctx, server.Addr, qname, qtype, do)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", server.Addr, err))
+		server := server
+		go func() {
+			res, err := exchanger(ctx, server.Addr, qname, qtype, do)
+			results <- outcome{result: res, server: server, err: err}
+		}()
+	}
+
+	var errs []string
+	for range servers {
+		outcome := <-results
+		if outcome.err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", outcome.server.Addr, outcome.err))
 			continue
 		}
-		res.Server = server
-		return res, nil
-	}
-	if len(errs) == 0 {
-		return nil, errors.New("no authoritative servers available")
+		outcome.result.Server = outcome.server
+		cancel()
+		return outcome.result, nil
 	}
 	return nil, fmt.Errorf("all authoritative servers failed: %s", strings.Join(errs, "; "))
 }
@@ -212,7 +238,7 @@ func resolveIterative(ctx context.Context, qname string, qtype uint16) (*iterati
 			return nil, err
 		}
 		if ref := extractReferral(res.Msg); ref != nil {
-			childServers, err := completeReferralServers(ctx, ref.NS, extractGlue(res.Msg, ref.NS))
+			childServers, err := completeReferralServers(ctx, ref.Zone, ref.NS, extractGlue(res.Msg, ref.NS))
 			if err != nil {
 				return nil, fmt.Errorf("resolve referral name servers for %s: %w", ref.Zone, err)
 			}
@@ -277,7 +303,7 @@ func buildZoneChainWithResolver(
 		if ref == nil {
 			return nil, fmt.Errorf("no NS delegation material found for %s from parent %s", childZone, parentZone)
 		}
-		childServers, err := completeReferralServersWithResolver(ctx, ref.NS, extractGlue(res.Msg, ref.NS), resolver)
+		childServers, err := completeReferralServersWithResolver(ctx, ref.Zone, ref.NS, extractGlue(res.Msg, ref.NS), resolver)
 		if err != nil {
 			return nil, fmt.Errorf("resolve delegation name servers for %s: %w", childZone, err)
 		}
@@ -296,27 +322,56 @@ func buildZoneChainWithResolver(
 	return hops, nil
 }
 
-func completeReferralServers(ctx context.Context, nsNames []string, glue []nsAddr) ([]nsAddr, error) {
-	return completeReferralServersWithResolver(ctx, nsNames, glue, resolveNameServers)
+func completeReferralServers(ctx context.Context, zone string, nsNames []string, glue []nsAddr) ([]nsAddr, error) {
+	return completeReferralServersWithResolver(ctx, zone, nsNames, glue, resolveNameServersBestEffort)
 }
 
-func completeReferralServersWithResolver(ctx context.Context, nsNames []string, glue []nsAddr, resolver func(context.Context, []string) ([]nsAddr, error)) ([]nsAddr, error) {
+func completeReferralServersWithResolver(ctx context.Context, zone string, nsNames []string, glue []nsAddr, resolver func(context.Context, []string) ([]nsAddr, error)) ([]nsAddr, error) {
 	if len(nsNames) == 0 {
 		return nil, errors.New("referral did not contain any NS names")
 	}
 
 	out := append([]nsAddr(nil), glue...)
+	if len(out) > 0 {
+		return uniqueNSAddrs(out), nil
+	}
 	missing := missingNSNames(nsNames, glue)
 	if len(missing) == 0 {
 		return uniqueNSAddrs(out), nil
 	}
 
-	resolved, err := resolver(ctx, missing)
+	resolvable, cyclical := bootstrapResolvableNSNames(zone, missing)
+	if len(resolvable) == 0 {
+		if len(out) > 0 {
+			return uniqueNSAddrs(out), nil
+		}
+		if len(cyclical) > 0 {
+			return nil, fmt.Errorf("missing glue for in-bailiwick name servers in %s: %s", dns.Fqdn(zone), strings.Join(cyclical, ", "))
+		}
+		return nil, errors.New("no bootstrap-resolvable referral name server names remained")
+	}
+
+	resolved, err := resolver(ctx, resolvable)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, resolved...)
 	return uniqueNSAddrs(out), nil
+}
+
+func bootstrapResolvableNSNames(zone string, names []string) ([]string, []string) {
+	zone = dns.Fqdn(zone)
+	var resolvable []string
+	var cyclical []string
+	for _, name := range uniqueStrings(names) {
+		name = dns.Fqdn(name)
+		if zone != "." && dns.IsSubDomain(zone, name) {
+			cyclical = append(cyclical, name)
+			continue
+		}
+		resolvable = append(resolvable, name)
+	}
+	return resolvable, cyclical
 }
 
 func missingNSNames(nsNames []string, known []nsAddr) []string {
@@ -347,22 +402,126 @@ func resolveNameServers(ctx context.Context, names []string) ([]nsAddr, error) {
 	return uniqueNSAddrs(out), nil
 }
 
-func resolveHostAddresses(ctx context.Context, name string) ([]string, error) {
-	var addrs []string
+func resolveNameServersBestEffort(ctx context.Context, names []string) ([]nsAddr, error) {
+	return resolveNameServersBestEffortWithResolver(ctx, names, 2, resolveHostAddresses)
+}
 
-	aRes, aErr := resolveIterative(ctx, name, dns.TypeA)
-	if aErr == nil {
-		for _, rr := range aRes.Response.Msg.Answer {
-			if a, ok := rr.(*dns.A); ok {
-				addrs = append(addrs, net.JoinHostPort(a.A.String(), "53"))
-			}
+func resolveNameServersBestEffortWithResolver(ctx context.Context, names []string, targetResolvedNames int, addrResolver func(context.Context, string) ([]string, error)) ([]nsAddr, error) {
+	names = uniqueStrings(names)
+	if len(names) == 0 {
+		return nil, errors.New("no referral name server names were provided")
+	}
+	if targetResolvedNames <= 0 {
+		targetResolvedNames = 1
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type outcome struct {
+		name  string
+		addrs []string
+		err   error
+	}
+	results := make(chan outcome, len(names))
+	for _, name := range names {
+		name := name
+		go func() {
+			addrs, err := addrResolver(ctx, name)
+			results <- outcome{name: dns.Fqdn(name), addrs: addrs, err: err}
+		}()
+	}
+
+	var (
+		out          []nsAddr
+		resolvedName int
+		errs         []string
+	)
+	for range names {
+		outcome := <-results
+		if outcome.err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", outcome.name, outcome.err))
+			continue
+		}
+		if len(outcome.addrs) == 0 {
+			continue
+		}
+		resolvedName++
+		for _, addr := range outcome.addrs {
+			out = append(out, nsAddr{Name: outcome.name, Addr: addr})
+		}
+		if resolvedName >= targetResolvedNames {
+			cancel()
+			break
 		}
 	}
-	aaaaRes, aaaaErr := resolveIterative(ctx, name, dns.TypeAAAA)
-	if aaaaErr == nil {
-		for _, rr := range aaaaRes.Response.Msg.Answer {
-			if aaaa, ok := rr.(*dns.AAAA); ok {
-				addrs = append(addrs, net.JoinHostPort(aaaa.AAAA.String(), "53"))
+
+	out = uniqueNSAddrs(out)
+	if len(out) > 0 {
+		return out, nil
+	}
+	if len(errs) == 0 {
+		return nil, errors.New("no referral name server addresses could be resolved")
+	}
+	return nil, fmt.Errorf("resolve referral name servers: %s", strings.Join(errs, "; "))
+}
+
+func resolveHostAddresses(ctx context.Context, name string) ([]string, error) {
+	if cache, ok := hostAddressCacheFromContext(ctx); ok {
+		return cache.do(ctx, name, func(callCtx context.Context) ([]string, error) {
+			return resolveHostAddressesUncached(callCtx, name)
+		})
+	}
+	return resolveHostAddressesUncached(ctx, name)
+}
+
+func resolveHostAddressesUncached(ctx context.Context, name string) ([]string, error) {
+	type familyOutcome struct {
+		qtype uint16
+		iter  *iterativeResult
+		err   error
+	}
+
+	results := make(chan familyOutcome, 2)
+	var wg sync.WaitGroup
+	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+		qtype := qtype
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			iter, err := resolveIterative(ctx, name, qtype)
+			results <- familyOutcome{qtype: qtype, iter: iter, err: err}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var (
+		addrs   []string
+		aErr    error
+		aaaaErr error
+	)
+	for outcome := range results {
+		switch outcome.qtype {
+		case dns.TypeA:
+			aErr = outcome.err
+			if outcome.err == nil {
+				for _, rr := range outcome.iter.Response.Msg.Answer {
+					if a, ok := rr.(*dns.A); ok {
+						addrs = append(addrs, net.JoinHostPort(a.A.String(), "53"))
+					}
+				}
+			}
+		case dns.TypeAAAA:
+			aaaaErr = outcome.err
+			if outcome.err == nil {
+				for _, rr := range outcome.iter.Response.Msg.Answer {
+					if aaaa, ok := rr.(*dns.AAAA); ok {
+						addrs = append(addrs, net.JoinHostPort(aaaa.AAAA.String(), "53"))
+					}
+				}
 			}
 		}
 	}

@@ -20,7 +20,7 @@ func (videoValidator) Validate(entry URLEntry) []Issue {
 
 		if thumbnail == "" || title == "" || description == "" || (contentLoc == "" && playerLoc == "") {
 			issues = append(issues, Issue{
-				Code:     "extension_video_invalid",
+				Code:     "sitemap_extension_video_invalid",
 				Message:  "video extension entry missing one or more required tags",
 				Severity: SeverityWarning,
 			})
@@ -28,21 +28,21 @@ func (videoValidator) Validate(entry URLEntry) []Issue {
 		}
 		if !isAbsoluteHTTPURL(thumbnail) {
 			issues = append(issues, Issue{
-				Code:     "extension_video_invalid",
+				Code:     "sitemap_extension_video_invalid",
 				Message:  "video extension thumbnail_loc must be an absolute http/https URL",
 				Severity: SeverityWarning,
 			})
 		}
 		if contentLoc != "" && !isAbsoluteHTTPURL(contentLoc) {
 			issues = append(issues, Issue{
-				Code:     "extension_video_invalid",
+				Code:     "sitemap_extension_video_invalid",
 				Message:  "video extension content_loc must be an absolute http/https URL",
 				Severity: SeverityWarning,
 			})
 		}
 		if playerLoc != "" && !isAbsoluteHTTPURL(playerLoc) {
 			issues = append(issues, Issue{
-				Code:     "extension_video_invalid",
+				Code:     "sitemap_extension_video_invalid",
 				Message:  "video extension player_loc must be an absolute http/https URL",
 				Severity: SeverityWarning,
 			})
@@ -50,4 +50,3 @@ func (videoValidator) Validate(entry URLEntry) []Issue {
 	}
 	return issues
 }
-

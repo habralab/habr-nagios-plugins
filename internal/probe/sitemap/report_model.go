@@ -39,16 +39,16 @@ func (r *Result) reportView() *checkreport.Report {
 			{Key: "max_urls", Value: fmt.Sprintf("%d", r.Config.MaxURLs)},
 		},
 		Metrics: []checkreport.Metric{
-			countMetric("sitemap_files", len(r.Documents)),
-			countMetric("urls", r.TotalURLs),
-			countMetric("depth", r.MaxObservedDepth),
-			countMetric("warnings", r.countProblems(SeverityWarning)),
-			countMetric("criticals", r.countProblems(SeverityCritical)),
-			countMetric("ignored", len(r.IgnoredProblems)),
-			countMetric("bytes_net", r.Perf.TotalNetBytes),
-			countMetric("bytes_raw", r.Perf.TotalRawBytes),
-			uintMetric("heap_alloc_peak", r.Perf.PeakHeapAlloc),
-			uintMetric("heap_sys_peak", r.Perf.PeakHeapSys),
+			checkreport.CountMetric("sitemap_files", len(r.Documents)),
+			checkreport.CountMetric("urls", r.TotalURLs),
+			checkreport.CountMetric("depth", r.MaxObservedDepth),
+			checkreport.CountMetric("warnings", r.countProblems(SeverityWarning)),
+			checkreport.CountMetric("criticals", r.countProblems(SeverityCritical)),
+			checkreport.CountMetric("ignored", len(r.IgnoredProblems)),
+			checkreport.CountMetric("bytes_net", r.Perf.TotalNetBytes),
+			checkreport.CountMetric("bytes_raw", r.Perf.TotalRawBytes),
+			checkreport.UintMetric("heap_alloc_peak", r.Perf.PeakHeapAlloc),
+			checkreport.UintMetric("heap_sys_peak", r.Perf.PeakHeapSys),
 		},
 		Findings:           makeReportFindings(r.Problems),
 		SuppressedFindings: makeReportFindings(r.IgnoredProblems),
@@ -118,10 +118,10 @@ func (r *Result) makeTargetStage() checkreport.Stage {
 		Target: r.reportPrimaryTarget(),
 		Checks: []checkreport.Check{
 			{
-				ID:      "target.selection",
-				State:   checkreport.CheckPass,
-				Subject: r.reportPrimaryTarget(),
-				Message: fmt.Sprintf("source=%s effective_base=%s hostname=%q url=%q entrypoint=%q", r.TargetSource, emptyAsDash(r.EffectiveBaseURL), r.Config.Hostname, r.Config.URL, r.Config.Entrypoint),
+				ID:           "target.selection",
+				State:        checkreport.CheckPass,
+				Subject:      r.reportPrimaryTarget(),
+				Message:      fmt.Sprintf("source=%s effective_base=%s hostname=%q url=%q entrypoint=%q", r.TargetSource, emptyAsDash(r.EffectiveBaseURL), r.Config.Hostname, r.Config.URL, r.Config.Entrypoint),
 				MinVerbosity: 1,
 			},
 		},
@@ -131,18 +131,18 @@ func (r *Result) makeTargetStage() checkreport.Stage {
 func (r *Result) makeDiscoveryStage() checkreport.Stage {
 	checks := make([]checkreport.Check, 0, len(r.DiscoveryTrace)+1)
 	checks = append(checks, checkreport.Check{
-		ID:      "discovery.summary",
-		State:   checkreport.CheckPass,
-		Subject: r.reportPrimaryTarget(),
-		Message: fmt.Sprintf("method=%s entrypoints=%d", r.DiscoveredVia, len(r.Entrypoints)),
+		ID:           "discovery.summary",
+		State:        checkreport.CheckPass,
+		Subject:      r.reportPrimaryTarget(),
+		Message:      fmt.Sprintf("method=%s entrypoints=%d", r.DiscoveredVia, len(r.Entrypoints)),
 		MinVerbosity: 1,
 	})
 	for _, line := range r.DiscoveryTrace {
 		checks = append(checks, checkreport.Check{
-			ID:      "discovery.trace",
-			State:   checkreport.CheckNote,
-			Subject: r.reportPrimaryTarget(),
-			Message: line,
+			ID:           "discovery.trace",
+			State:        checkreport.CheckNote,
+			Subject:      r.reportPrimaryTarget(),
+			Message:      line,
 			MinVerbosity: 1,
 		})
 	}
@@ -156,9 +156,9 @@ func (r *Result) makeDiscoveryStage() checkreport.Stage {
 }
 
 func (r *Result) makeValidationStage() checkreport.Stage {
-	checks := make([]checkreport.Check, 0, len(r.Rules)+len(r.Entrypoints)+len(r.IgnoredProblems))
-	for i, rule := range r.Rules {
-		checks = append(checks, ruleToCheck(i, rule))
+	checks := make([]checkreport.Check, 0, len(r.RuleChecks)+len(r.Entrypoints)+len(r.IgnoredProblems))
+	for _, rule := range r.RuleChecks {
+		checks = append(checks, rule)
 	}
 	for i, problem := range r.IgnoredProblems {
 		checks = append(checks, checkreport.Check{
@@ -167,19 +167,16 @@ func (r *Result) makeValidationStage() checkreport.Stage {
 			Subject: problem.URL,
 			Message: problem.Message,
 			Meta: []checkreport.KV{
-				{Key: "order", Value: fmt.Sprintf("%06d", len(r.Rules)+i)},
-				{Key: "legacy_rule", Value: "true"},
-				{Key: "status", Value: "IGNORE"},
-				{Key: "name", Value: "problem." + problem.Code},
+				{Key: "order", Value: fmt.Sprintf("%06d", len(r.RuleChecks)+i)},
 			},
 		})
 	}
 	for _, ep := range r.Entrypoints {
 		checks = append(checks, checkreport.Check{
-			ID:      "entrypoint",
-			State:   checkreport.CheckPass,
-			Subject: ep,
-			Message: ep,
+			ID:           "entrypoint",
+			State:        checkreport.CheckPass,
+			Subject:      ep,
+			Message:      ep,
 			MinVerbosity: 1,
 		})
 	}
@@ -196,10 +193,10 @@ func (r *Result) makeDocumentsStage() checkreport.Stage {
 	checks := make([]checkreport.Check, 0, len(r.Documents))
 	for _, doc := range r.Documents {
 		checks = append(checks, checkreport.Check{
-			ID:      "document",
-			State:   checkreport.CheckPass,
-			Subject: doc.URL,
-			Message: fmt.Sprintf("depth=%d kind=%s status=%d entries=%d children=%d encoding=%s gzip=%t url=%s", doc.Depth, doc.Kind, doc.StatusCode, doc.Entries, doc.Children, doc.Encoding, doc.Compressed, doc.URL),
+			ID:           "document",
+			State:        checkreport.CheckPass,
+			Subject:      doc.URL,
+			Message:      fmt.Sprintf("depth=%d kind=%s status=%d entries=%d children=%d encoding=%s gzip=%t url=%s", doc.Depth, doc.Kind, doc.StatusCode, doc.Entries, doc.Children, doc.Encoding, doc.Compressed, doc.URL),
 			MinVerbosity: 1,
 		})
 	}
@@ -220,10 +217,10 @@ func (r *Result) makePerformanceStage() checkreport.Stage {
 		Target: r.reportPrimaryTarget(),
 		Checks: []checkreport.Check{
 			{
-				ID:      "performance.summary",
-				State:   checkreport.CheckNote,
-				Subject: r.reportPrimaryTarget(),
-				Message: fmt.Sprintf("elapsed=%s net_bytes=%d raw_bytes=%d heap_alloc_peak=%d heap_sys_peak=%d", r.Perf.Elapsed, r.Perf.TotalNetBytes, r.Perf.TotalRawBytes, r.Perf.PeakHeapAlloc, r.Perf.PeakHeapSys),
+				ID:           "performance.summary",
+				State:        checkreport.CheckNote,
+				Subject:      r.reportPrimaryTarget(),
+				Message:      fmt.Sprintf("elapsed=%s net_bytes=%d raw_bytes=%d heap_alloc_peak=%d heap_sys_peak=%d", r.Perf.Elapsed, r.Perf.TotalNetBytes, r.Perf.TotalRawBytes, r.Perf.PeakHeapAlloc, r.Perf.PeakHeapSys),
 				MinVerbosity: 1,
 			},
 		},
@@ -268,12 +265,12 @@ func makeHTTPTraces(calls []HTTPCall) []checkreport.TraceEvent {
 			attrs = append(attrs, checkreport.KV{Key: "note", Value: call.Note})
 		}
 		out = append(out, checkreport.TraceEvent{
-			Kind:       "http",
-			StageID:    "validation",
-			State:      httpTraceState(call),
-			Target:     call.URL,
-			Message:    httpTraceMessage(call),
-			Attributes: attrs,
+			Kind:         "http",
+			StageID:      "validation",
+			State:        httpTraceState(call),
+			Target:       call.URL,
+			Message:      httpTraceMessage(call),
+			Attributes:   attrs,
 			MinVerbosity: 2,
 		})
 	}
@@ -301,36 +298,6 @@ func httpTraceState(call HTTPCall) checkreport.CheckState {
 		return checkreport.CheckNote
 	}
 	return checkreport.CheckPass
-}
-
-func ruleToCheck(order int, rule RuleCheck) checkreport.Check {
-	return checkreport.Check{
-		ID:      rule.Name,
-		State:   ruleState(rule.Status),
-		Subject: rule.Target,
-		Message: rule.Detail,
-		Meta: []checkreport.KV{
-			{Key: "order", Value: fmt.Sprintf("%06d", order)},
-			{Key: "legacy_rule", Value: "true"},
-			{Key: "status", Value: rule.Status},
-			{Key: "name", Value: rule.Name},
-		},
-	}
-}
-
-func ruleState(status string) checkreport.CheckState {
-	switch strings.ToUpper(status) {
-	case "FAIL":
-		return checkreport.CheckCritical
-	case "WARN":
-		return checkreport.CheckWarning
-	case "PASS":
-		return checkreport.CheckPass
-	case "IGNORE":
-		return checkreport.CheckIgnore
-	default:
-		return checkreport.CheckNote
-	}
 }
 
 func reportStatusFromSeverity(sev Severity) checkreport.Status {
@@ -369,16 +336,6 @@ func stageStatusFromChecks(checks []checkreport.Check, findings []checkreport.Fi
 	return status
 }
 
-func countMetric(name string, value int) checkreport.Metric {
-	v := float64(value)
-	return checkreport.Metric{Name: name, Type: "count", Value: fmt.Sprintf("%d", value), Number: &v}
-}
-
-func uintMetric(name string, value uint64) checkreport.Metric {
-	v := float64(value)
-	return checkreport.Metric{Name: name, Type: "count", Value: fmt.Sprintf("%d", value), Number: &v}
-}
-
 func (r *Result) FindingsForCategory(categories ...string) []checkreport.Finding {
 	if len(categories) == 0 {
 		return nil
@@ -389,16 +346,13 @@ func (r *Result) FindingsForCategory(categories ...string) []checkreport.Finding
 	}
 	findings := make([]checkreport.Finding, 0)
 	for _, p := range r.Problems {
-		for _, descriptor := range CatalogEntries() {
-			if descriptor.Slug == p.Code && allowed[descriptor.Category] {
-				findings = append(findings, checkreport.Finding{
-					Code:     p.Code,
-					Severity: reportStatusFromSeverity(p.Severity),
-					Target:   p.URL,
-					Message:  p.Message,
-				})
-				break
-			}
+		if category, ok := CatalogCategory(p.Code); ok && allowed[category] {
+			findings = append(findings, checkreport.Finding{
+				Code:     p.Code,
+				Severity: reportStatusFromSeverity(p.Severity),
+				Target:   p.URL,
+				Message:  p.Message,
+			})
 		}
 	}
 	return findings

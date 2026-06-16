@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
-	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 )
 
@@ -72,15 +71,6 @@ func DefaultConfig() Config {
 	}
 }
 
-type Severity = finding.Severity
-type Problem = finding.Problem
-
-const (
-	SeverityOK       = finding.SeverityOK
-	SeverityWarning  = finding.SeverityWarning
-	SeverityCritical = finding.SeverityCritical
-)
-
 type Group struct {
 	UserAgents []string
 	Allows     []string
@@ -98,13 +88,6 @@ type HTTPCall struct {
 	TotalTime   time.Duration
 	Bytes       int
 	Note        string
-}
-
-type RuleCheck struct {
-	Status string
-	Name   string
-	Target string
-	Detail string
 }
 
 type PerfStats struct {
@@ -131,7 +114,7 @@ type Result struct {
 	KnownAgents        []KnownAgentObservation
 	Problems           []Problem
 	IgnoredProblems    []Problem
-	Rules              []RuleCheck
+	RuleChecks         []checkreport.Check
 	HTTPTrace          []HTTPCall
 	Perf               PerfStats
 	Absent             bool
@@ -170,7 +153,6 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	defer func() {
 		result.Perf.Elapsed = time.Since(startedAt)
 	}()
-	result.addRule("PASS", "target.selection", robotsURL, targetSelectionTrace(cfg, baseSite, robotsURL))
 
 	res, err := fetch(ctx, client, cfg, robotsURL, result)
 	if err != nil {

@@ -15,7 +15,7 @@ func (imageValidator) Validate(entry URLEntry) []Issue {
 		loc := childText(child, NamespaceImage, "loc")
 		if loc == "" {
 			issues = append(issues, Issue{
-				Code:     "extension_image_invalid",
+				Code:     "sitemap_extension_image_invalid",
 				Message:  "image extension entry missing image:loc",
 				Severity: SeverityWarning,
 			})
@@ -23,7 +23,7 @@ func (imageValidator) Validate(entry URLEntry) []Issue {
 		}
 		if !isAbsoluteHTTPURL(loc) {
 			issues = append(issues, Issue{
-				Code:     "extension_image_invalid",
+				Code:     "sitemap_extension_image_invalid",
 				Message:  "image extension image:loc must be an absolute http/https URL",
 				Severity: SeverityWarning,
 			})
@@ -31,4 +31,3 @@ func (imageValidator) Validate(entry URLEntry) []Issue {
 	}
 	return issues
 }
-

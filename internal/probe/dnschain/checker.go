@@ -18,6 +18,8 @@ type Config struct {
 	OutputMode     checkreport.OutputMode
 	IgnoreErrors   []string
 	IgnoreErrorSet map[string]bool
+	ShowHelp       bool
+	ShowVersion    bool
 	ShowErrorSlugs bool
 	Analyzer       Analyzer
 }

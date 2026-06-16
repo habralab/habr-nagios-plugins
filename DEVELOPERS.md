@@ -240,20 +240,32 @@ Current direction:
 
 - shared build-time version formatting lives in `internal/core/buildinfo`
 - shared help-option structures and option-list rendering live in `internal/core/clihelp`
-- shared finding catalog entries, severity naming, and suppression metadata live in `internal/core/finding`
+- shared help-document rendering also lives in `internal/core/clihelp`; probe apps should describe help through a small document structure such as summary, usage lines, and options rather than hand-writing `fmt.Printf` templates
+- shared suppressible-finding catalog plumbing lives in `internal/core/rulecatalog`
+- shared finding primitives such as `Severity`, `Problem`, and severity-name formatting live in `internal/core/finding`
+- shared user-facing message catalog plumbing for future i18n lives in `internal/core/msgcatalog`
+- probe-local suppressible finding definitions and category inference live next to each probe when those catalogs are probe-specific, for example `internal/probe/robots/findings.go`, `internal/probe/sitemap/findings.go`, and `internal/probe/dnschain/findings.go`
 - shared client construction lives in `internal/core/httpx`
 - shared redirect policy helpers live next to that module in `internal/core/httpx/redirects.go`
-- shared transport-related help text should live near that module
+- shared CLI helper text for repeated options such as `--ignore-errors` and `--list-error-slugs` lives in `internal/core/probecli`
+- shared standard CLI flag registration and finalization for `--timeout`, `--output`, `--ignore-errors`, `-v/--verbose`, `-h/--help`, `-V/--version`, and `--list-error-slugs` lives in `internal/core/probecli`; probe apps should add probe-local flags around that shared layer rather than rebuilding the common contract by hand
+- shared probe CLI helpers may also render final probe output from the common `summary/detail/json/exit-code` contract, so app entrypoints do not each reimplement the same post-run stdout path
+- shared probe CLI helpers may also dispatch common toggles such as version, help, and error-slug listing through small ordered actions, so app entrypoints do not each reimplement the same pre-run control flow
 - shared HTTP transport should resolve hostnames through `dnsresolver` rather than assuming the host OS recursive resolver is acceptable; per-probe overrides can still inject a custom `HTTPClient` when tests or diagnostics need it
 - if a future CLI flag allows system-resolver short-circuiting, that override should be implemented in the shared resolver/transport layer rather than as probe-local conditionals; probes may choose to surface the implications, but the resolver itself should not force that into user-facing output
 - shared probe identity and naming helpers live in `internal/core/probemeta`
 - shared verbosity parsing and clamping live in `internal/core/verbosity`
 - shared target URL normalization and base-site derivation live in `internal/core/targeturl`
-- shared probe CLI helpers for program naming, timeout parsing, CSV parsing, and ignored-slug validation live in `internal/core/probecli`
+- shared probe CLI helpers for program naming, timeout parsing, CSV parsing, ignored-slug validation, and suppressible-finding list rendering live in `internal/core/probecli`
+- probe config structs should carry standard toggle state such as help, version, and error-slug listing when that state survives parsing into the app-to-probe contract; app-local booleans for the same common toggles should be treated as transitional drift
 - shared authoritative DNS and DNSSEC lookup helpers live in `internal/core/dnsresolver`
 - shared report structures for staged checks and multi-renderer output live in `internal/core/checkreport`
 - shared renderer-facing check presentation helpers also live in `internal/core/checkreport` when they operate only on the shared report model, for example verbosity-aware hiding of low-level checks and aggregation of repeated success checks
+- shared verbose text rendering skeleton also lives in `internal/core/checkreport`; probes should assemble an ordered section plan from shared and probe-local section writers instead of hand-building the whole detailed output as one monolithic function
+- shared section writers should cover common report families such as findings, suppressed findings, rule checks, report overview, meta, stages, and traces when their formatting already matches across multiple probes
+- probe-local renderers should shrink toward section adapters: they may still format probe-specific sections such as parsed robots groups or sitemap document summaries, but they should avoid re-implementing shared section families
 - probe apps should aggregate shared and probe-local flags into one help output
+- the intended `internal/app/*` shape is narrow: parse flags, build a help document, dispatch standard toggles, invoke the probe, and hand the result to shared rendering helpers
 - shared options should appear in a stable order in CLI help
 - the default HTTP `User-Agent` should identify the whole tool family, not a single probe binary
 - the default HTTP `User-Agent` should expose only a release tag or `dev`, not branch names or commit hashes
@@ -271,7 +283,26 @@ Current exception:
 - the intended contract is: collector/analyzer code produces structured stages, checks, findings, and metrics; renderers then emit Nagios-style text, JSON, or later external-consumer formats from the same report tree
 - the shared report model may also carry target sets, trace events, partial-coverage markers, and suppressed findings when that helps represent mature probe behavior without forcing probe-specific JSON schemas
 - the shared report model may also carry renderer hints on individual checks, such as `min_verbosity`, `aggregation_key`, and `aggregation_mode`, so text renderers can collapse repeated success noise without deleting atomic evidence from JSON output
-- shared renderer helpers may also cover trace filtering, legacy-rule extraction, stable report lookups, and perfdata formatting when those operations already have multiple probe consumers and still operate only on the shared report model
+- shared renderer helpers may also cover trace filtering, stable report lookups, rule-check presentation/selection, and perfdata formatting when those operations already have multiple probe consumers and still operate only on the shared report model
+
+Current message-catalog policy:
+
+- this repository is preparing for future i18n, but the current phase is a Go-native prototype rather than YAML, JSON, or gettext catalogs
+- machine-facing semantics such as finding slugs, severity, category, policy flags, and branching stay in code
+- user-facing copy such as titles, summaries, details, and hints should move into a message-catalog layer when that copy already belongs to a shared contract
+- the current shared message-catalog module is `internal/core/msgcatalog`
+- the current message-catalog contract is intentionally small: stable message keys, fixed variants such as `summary` and `detail`, and flat parameter substitution
+- the current default catalog is assembled from distributed component sources rather than one monolithic text blob; probe-local or component-local sources are merged in `internal/core/msgcatalog`
+- shared renderer labels and shared help-text fragments also live on those rails when they are already stable across multiple probes; probes should consume them through tiny shared helpers rather than copying the same English strings
+- message rendering must not contain business logic; probes and renderers compute semantics first and only then ask the catalog to format text
+- the migration scope is deliberately narrow: only copy that is already on shared rails should move first, for example common finding copy or common renderer labels
+- for shared finding copy, the finding slug itself is the current message key; probe-local finding registries keep semantics and defaults such as severity/category, while the default user-facing summary text is resolved through `internal/core/msgcatalog`
+- canonical finding slugs are namespaced with a stable probe or component prefix such as `dnschain_`, `robots_`, or `sitemap_`; new bare slugs should not be introduced
+- when a probe reuses another component's finding family, it should reuse that component prefix rather than minting a second spelling for the same family
+- temporary legacy slug aliases may exist only as transition shims around probe boundaries; catalogs, emitted reports, and help output should prefer canonical namespaced slugs
+- probe-specific narrative text, ad-hoc trace prose, and still-evolving verbose sections may remain local until that probe is otherwise being adapted
+- raw user-facing prose should not be cemented into new semantic registries when a stable message key would better express intent
+- external catalog formats are out of scope for now; if the Go-native prototype proves too restrictive later, the data source can change without changing the key and variant contract
 
 Current renderer policy:
 

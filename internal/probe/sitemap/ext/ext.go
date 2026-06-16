@@ -110,4 +110,3 @@ func isAbsoluteHTTPURL(raw string) bool {
 	}
 	return u.Scheme == "http" || u.Scheme == "https"
 }
-

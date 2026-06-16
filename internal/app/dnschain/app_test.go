@@ -16,7 +16,7 @@ import (
 const testProgramName = "check_dnschain"
 
 func TestParseFlagsSupportsJSONOutput(t *testing.T) {
-	cfg, showHelp, showVersion, err := parseFlags(testProgramName, []string{
+	cfg, err := parseFlags(testProgramName, []string{
 		"-H", "www.example.com",
 		"--output", "json",
 		"--timeout", "45s",
@@ -26,11 +26,11 @@ func TestParseFlagsSupportsJSONOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseFlags() error = %v", err)
 	}
-	if showHelp {
-		t.Fatalf("showHelp = true, want false")
+	if cfg.ShowHelp {
+		t.Fatalf("ShowHelp = true, want false")
 	}
-	if showVersion {
-		t.Fatalf("showVersion = true, want false")
+	if cfg.ShowVersion {
+		t.Fatalf("ShowVersion = true, want false")
 	}
 	if got, want := string(cfg.OutputMode), "json"; got != want {
 		t.Fatalf("OutputMode = %q, want %q", got, want)
@@ -44,15 +44,15 @@ func TestParseFlagsSupportsJSONOutput(t *testing.T) {
 }
 
 func TestParseFlagsSupportsIgnoreErrors(t *testing.T) {
-	cfg, showHelp, showVersion, err := parseFlags(testProgramName, []string{
+	cfg, err := parseFlags(testProgramName, []string{
 		"--zone", "example.com",
 		"--ignore-errors", "dnschain_child_soa_inconsistent,dnschain_nsec3param_not_recommended",
 	})
 	if err != nil {
 		t.Fatalf("parseFlags() error = %v", err)
 	}
-	if showHelp || showVersion {
-		t.Fatalf("unexpected help/version flags: help=%t version=%t", showHelp, showVersion)
+	if cfg.ShowHelp || cfg.ShowVersion {
+		t.Fatalf("unexpected help/version flags: help=%t version=%t", cfg.ShowHelp, cfg.ShowVersion)
 	}
 	if got, want := len(cfg.IgnoreErrors), 2; got != want {
 		t.Fatalf("IgnoreErrors len = %d, want %d", got, want)
@@ -63,12 +63,12 @@ func TestParseFlagsSupportsIgnoreErrors(t *testing.T) {
 }
 
 func TestParseFlagsListErrorSlugs(t *testing.T) {
-	cfg, showHelp, showVersion, err := parseFlags(testProgramName, []string{"--list-error-slugs"})
+	cfg, err := parseFlags(testProgramName, []string{"--list-error-slugs"})
 	if err != nil {
 		t.Fatalf("parseFlags() error = %v", err)
 	}
-	if showHelp || showVersion {
-		t.Fatalf("unexpected help/version flags: help=%t version=%t", showHelp, showVersion)
+	if cfg.ShowHelp || cfg.ShowVersion {
+		t.Fatalf("unexpected help/version flags: help=%t version=%t", cfg.ShowHelp, cfg.ShowVersion)
 	}
 	if !cfg.ShowErrorSlugs {
 		t.Fatalf("ShowErrorSlugs = false, want true")
@@ -76,7 +76,7 @@ func TestParseFlagsListErrorSlugs(t *testing.T) {
 }
 
 func TestParseFlagsRejectsUnknownIgnoredSlug(t *testing.T) {
-	_, _, _, err := parseFlags(testProgramName, []string{
+	_, err := parseFlags(testProgramName, []string{
 		"--zone", "example.com",
 		"--ignore-errors", "unknown_slug",
 	})

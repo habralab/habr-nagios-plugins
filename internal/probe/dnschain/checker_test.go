@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 func TestRunBuildsStructuredUnknownReport(t *testing.T) {
@@ -44,7 +45,7 @@ func TestRunRequiresTarget(t *testing.T) {
 }
 
 func TestParseOutputMode(t *testing.T) {
-	mode, err := ParseOutputMode("json")
+	mode, err := probecli.ParseOutputMode("json")
 	if err != nil {
 		t.Fatalf("ParseOutputMode() error = %v", err)
 	}

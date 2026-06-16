@@ -2,6 +2,7 @@ package dnsresolver
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,4 +112,63 @@ func TestHasNSEC3WildcardNoDataPattern(t *testing.T) {
 	}) {
 		t.Fatalf("hasNSEC3WildcardNoData() = false, want true")
 	}
+}
+
+func TestValidateNoDataProofCloudflareNSEC(t *testing.T) {
+	now := time.Date(2026, 6, 16, 13, 0, 0, 0, time.UTC)
+	keys := parseDNSKEYSet(t, strings.TrimSpace(`
+www.cloudflare.com. 2561 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8 KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==
+www.cloudflare.com. 2561 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+ KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==
+`))
+	authority := parseAuthorityRRs(t, strings.TrimSpace(`
+www.cloudflare.com. 1800 IN SOA jule.ns.cloudflare.com. dns.cloudflare.com. 2407066584 10000 2400 604800 1800
+_443._tcp.www.cloudflare.com. 1800 IN NSEC \000._443._tcp.www.cloudflare.com. RRSIG NSEC TYPE128
+www.cloudflare.com. 1800 IN RRSIG SOA 13 3 1800 20260617145636 20260615125636 34505 www.cloudflare.com. /YbJ+GqztDN3RNIiW5qKQ3RBUPlJDZsuLGSqMhCnAiDsZyJjLCEwvwA2 VvqGDBqvUyI1kq9vsYLJLmccMSWZxw==
+_443._tcp.www.cloudflare.com. 1800 IN RRSIG NSEC 13 5 1800 20260617145636 20260615125636 34505 www.cloudflare.com. odO9wBoKpuQNCFn9Vo+gV82LmvnupEjfj9nqh0td/0S0BEYM6RD1f8Fu 0cvtYo1sShCdSpqcqYELNDMOYfF79w==
+`))
+	ok, message, err := validateNoDataProof("_443._tcp.www.cloudflare.com.", dns.TypeTLSA, authority, keys, now)
+	if err != nil {
+		t.Fatalf("validateNoDataProof() error = %v", err)
+	}
+	if !ok {
+		t.Fatalf("validateNoDataProof() ok = false, message = %q", message)
+	}
+}
+
+func parseDNSKEYSet(t *testing.T, text string) []*dns.DNSKEY {
+	t.Helper()
+	var out []*dns.DNSKEY
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		rr, err := dns.NewRR(line)
+		if err != nil {
+			t.Fatalf("dns.NewRR(%q) error = %v", line, err)
+		}
+		key, ok := rr.(*dns.DNSKEY)
+		if !ok {
+			t.Fatalf("RR %q is %T, want *dns.DNSKEY", line, rr)
+		}
+		out = append(out, key)
+	}
+	return out
+}
+
+func parseAuthorityRRs(t *testing.T, text string) []dns.RR {
+	t.Helper()
+	var out []dns.RR
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		rr, err := dns.NewRR(line)
+		if err != nil {
+			t.Fatalf("dns.NewRR(%q) error = %v", line, err)
+		}
+		out = append(out, rr)
+	}
+	return out
 }

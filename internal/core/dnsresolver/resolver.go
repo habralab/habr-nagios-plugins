@@ -41,6 +41,7 @@ type Resolver struct {
 	lookupCache   map[string]LookupResult
 	resolveCache  map[string]ResolveResult
 	validateCache map[string]validationResult
+	hostAddrCache *hostAddressCache
 	familyCaps    familyCapabilityCache
 	iterativeFn   func(context.Context, string, uint16) (*iterativeResult, error)
 	validateFn    func(context.Context, string, []nsAddr) (SecurityState, []*dns.DNSKEY, string, error)
@@ -55,6 +56,7 @@ func NewResolver(queryTimeout time.Duration) *Resolver {
 		lookupCache:   map[string]LookupResult{},
 		resolveCache:  map[string]ResolveResult{},
 		validateCache: map[string]validationResult{},
+		hostAddrCache: newHostAddressCache(),
 	}
 	r.iterativeFn = func(ctx context.Context, qname string, qtype uint16) (*iterativeResult, error) {
 		return resolveIterative(ctx, qname, qtype)
@@ -82,6 +84,7 @@ type validationResult struct {
 func (r *Resolver) Lookup(ctx context.Context, qname string, qtype uint16) (LookupResult, error) {
 	ctx = withDNSQueryTimeout(ctx, r.QueryTimeout)
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withHostAddressCache(ctx, r.hostAddrCache)
 	fqdn := dns.Fqdn(qname)
 	cacheKey := lookupCacheKey(fqdn, qtype)
 
@@ -173,6 +176,7 @@ func (r *Resolver) Lookup(ctx context.Context, qname string, qtype uint16) (Look
 
 func (r *Resolver) LookupEffectiveCAA(ctx context.Context, qname string) (EffectiveCAAResult, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withHostAddressCache(ctx, r.hostAddrCache)
 	current := dns.Fqdn(qname)
 	for {
 		lookup, err := r.Lookup(ctx, current, dns.TypeCAA)
@@ -192,6 +196,7 @@ func (r *Resolver) LookupEffectiveCAA(ctx context.Context, qname string) (Effect
 
 func (r *Resolver) cachedZoneValidation(ctx context.Context, zone string, finalServers []nsAddr) (SecurityState, []*dns.DNSKEY, string, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withHostAddressCache(ctx, r.hostAddrCache)
 	zone = dns.Fqdn(zone)
 
 	r.mu.Lock()
@@ -303,8 +308,29 @@ func finalAuthority(iter *iterativeResult) (string, []nsAddr) {
 	if iter == nil || len(iter.Hops) == 0 {
 		return ".", append([]nsAddr(nil), rootHintsAny...)
 	}
+	if zone := authoritativeZoneFromMessage(iter.Response.Msg); zone != "" {
+		return zone, append([]nsAddr(nil), iter.Hops[len(iter.Hops)-1].ChildServers...)
+	}
 	last := iter.Hops[len(iter.Hops)-1]
 	return last.ToZone, append([]nsAddr(nil), last.ChildServers...)
+}
+
+func authoritativeZoneFromMessage(msg *dns.Msg) string {
+	if msg == nil {
+		return ""
+	}
+	var best string
+	for _, rr := range msg.Ns {
+		soa, ok := rr.(*dns.SOA)
+		if !ok {
+			continue
+		}
+		owner := dns.Fqdn(soa.Header().Name)
+		if best == "" || dns.CountLabel(owner) > dns.CountLabel(best) {
+			best = owner
+		}
+	}
+	return best
 }
 
 func parentName(name string) string {

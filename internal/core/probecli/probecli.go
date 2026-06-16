@@ -2,13 +2,18 @@ package probecli
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/msgcatalog"
+	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 )
 
 type ErrorSlugDescriptor struct {
@@ -18,12 +23,139 @@ type ErrorSlugDescriptor struct {
 	Message  string
 }
 
+type ResultOutput interface {
+	JSON() ([]byte, error)
+	Summary() string
+	Detail() string
+	ExitCode() int
+}
+
+type ToggleAction struct {
+	Enabled  bool
+	Output   string
+	ExitCode int
+}
+
+type CommonFlags struct {
+	normalizedArgs  []string
+	baseVerbosity   int
+	Timeout         string
+	Output          string
+	IgnoreErrorsRaw string
+	Verbosity       int
+	ShowHelp        bool
+	ShowVersion     bool
+	ShowErrorSlugs  bool
+}
+
+type CommonOptions struct {
+	Timeout        time.Duration
+	OutputMode     checkreport.OutputMode
+	IgnoreErrors   []string
+	IgnoreErrorSet map[string]bool
+	Verbosity      int
+	ShowHelp       bool
+	ShowVersion    bool
+	ShowErrorSlugs bool
+}
+
+func IgnoreErrorsOptionDescription() string {
+	return "Comma-separated finding slugs to suppress from status aggregation.\n" +
+		"Use --list-error-slugs to see the available values."
+}
+
+func ListErrorSlugsOptionDescription() string {
+	return "Print the available suppressible error slugs with category, default severity, and message, then exit."
+}
+
+func HelpOptionDescription() string {
+	return msgcatalog.DefaultSummaryOrKey("common_help_show_help")
+}
+
+func VersionOptionDescription() string {
+	return msgcatalog.DefaultSummaryOrKey("common_help_show_version")
+}
+
+func VerboseOptionDescription() string {
+	return msgcatalog.DefaultSummaryOrKey("common_help_verbose")
+}
+
+func TimeoutOptionDescription(defaultValue string) string {
+	return msgcatalog.DefaultSummaryOrKey("common_help_timeout_prefix") + "\nDefault: " + strings.TrimSpace(defaultValue) + "."
+}
+
+func OutputModeOptionDescription(jsonLine string) string {
+	return msgcatalog.DefaultSummaryOrKey("common_help_output_prefix") + "\n" +
+		msgcatalog.DefaultSummaryOrKey("common_help_output_nagios") + "\n" +
+		strings.TrimSpace(jsonLine) + "\n" +
+		"Default: nagios."
+}
+
 func EffectiveProgramName(programName, defaultBinaryName string) string {
 	name := strings.TrimSpace(filepath.Base(programName))
 	if name == "" || name == "." || name == string(filepath.Separator) {
 		return defaultBinaryName
 	}
 	return name
+}
+
+func NewCommonFlagSet(binName string, args []string) (*flag.FlagSet, *CommonFlags, error) {
+	normalizedArgs, baseVerbosity, err := verbosity.NormalizeArgs(args)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fs := flag.NewFlagSet(binName, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	return fs, &CommonFlags{
+		normalizedArgs: normalizedArgs,
+		baseVerbosity:  baseVerbosity,
+	}, nil
+}
+
+func (f *CommonFlags) Args() []string {
+	return f.normalizedArgs
+}
+
+func (f *CommonFlags) Register(fs *flag.FlagSet, defaultTimeout string) {
+	fs.StringVar(&f.Timeout, "t", defaultTimeout, "overall timeout")
+	fs.StringVar(&f.Timeout, "timeout", defaultTimeout, "overall timeout")
+	fs.StringVar(&f.Output, "output", "nagios", "output mode: nagios|json")
+	fs.StringVar(&f.IgnoreErrorsRaw, "ignore-errors", "", "comma-separated error slugs to suppress")
+	fs.IntVar(&f.Verbosity, "v", 0, "verbosity level 0..3")
+	fs.IntVar(&f.Verbosity, "verbose", 0, "verbosity level 0..3")
+	fs.BoolVar(&f.ShowHelp, "h", false, "show help")
+	fs.BoolVar(&f.ShowHelp, "help", false, "show help")
+	fs.BoolVar(&f.ShowErrorSlugs, "list-error-slugs", false, "list suppressible error slugs and exit")
+	fs.BoolVar(&f.ShowVersion, "V", false, "show version")
+	fs.BoolVar(&f.ShowVersion, "version", false, "show version")
+}
+
+func (f *CommonFlags) Resolve(hasSlug func(string) bool) (CommonOptions, error) {
+	timeout, err := ParseTimeout(f.Timeout, "--timeout")
+	if err != nil {
+		return CommonOptions{}, err
+	}
+	outputMode, err := ParseOutputMode(f.Output)
+	if err != nil {
+		return CommonOptions{}, err
+	}
+	ignoreErrors, ignoreErrorSet, err := BuildIgnoreErrorSet(f.IgnoreErrorsRaw, hasSlug)
+	if err != nil {
+		return CommonOptions{}, err
+	}
+
+	return CommonOptions{
+		Timeout:        timeout,
+		OutputMode:     outputMode,
+		IgnoreErrors:   ignoreErrors,
+		IgnoreErrorSet: ignoreErrorSet,
+		Verbosity:      verbosity.Clamp(f.baseVerbosity + f.Verbosity),
+		ShowHelp:       f.ShowHelp,
+		ShowVersion:    f.ShowVersion,
+		ShowErrorSlugs: f.ShowErrorSlugs,
+	}, nil
 }
 
 func ParseTimeout(raw, flagName string) (time.Duration, error) {
@@ -98,4 +230,57 @@ func DetectOutputMode(args []string) checkreport.OutputMode {
 		}
 	}
 	return checkreport.OutputNagios
+}
+
+func ParseOutputMode(raw string) (checkreport.OutputMode, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", string(checkreport.OutputNagios):
+		return checkreport.OutputNagios, nil
+	case string(checkreport.OutputJSON):
+		return checkreport.OutputJSON, nil
+	default:
+		return "", fmt.Errorf("invalid --output %q, expected nagios or json", raw)
+	}
+}
+
+func RenderEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) string {
+	if outputMode == checkreport.OutputJSON {
+		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
+		if jsonErr == nil {
+			return string(data) + "\n"
+		}
+		return fmt.Sprintf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
+	}
+	return fmt.Sprintf("UNKNOWN - %v\n", err)
+}
+
+func RenderResult(result ResultOutput, outputMode checkreport.OutputMode, verbosity int) (string, int, error) {
+	if outputMode == checkreport.OutputJSON {
+		data, err := result.JSON()
+		if err != nil {
+			return "", 3, fmt.Errorf("failed to encode JSON output: %w", err)
+		}
+		return string(data) + "\n", result.ExitCode(), nil
+	}
+	if verbosity > 0 {
+		return result.Detail(), result.ExitCode(), nil
+	}
+	return result.Summary() + "\n", result.ExitCode(), nil
+}
+
+func DispatchToggleActions(actions ...ToggleAction) (string, int, bool) {
+	for _, action := range actions {
+		if action.Enabled {
+			return action.Output, action.ExitCode, true
+		}
+	}
+	return "", 0, false
+}
+
+func VersionAction(binName string, enabled bool, exitCode int) ToggleAction {
+	return ToggleAction{
+		Enabled:  enabled,
+		Output:   buildinfo.String(binName) + "\n",
+		ExitCode: exitCode,
+	}
 }

@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
-	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
-	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 func (r *Result) ExitCode() int {
@@ -29,72 +27,38 @@ func (r *Result) Detail() string {
 	if verbosity < 1 {
 		verbosity = 1
 	}
-	var b strings.Builder
-
-	b.WriteString(r.Summary())
-	b.WriteByte('\n')
-	if verbosity > 0 {
-		writeTargetSection(&b, report, verbosity)
-	}
-	if len(report.Traces) > 0 {
-		writeHTTPSection(&b, report, verbosity)
-	}
-	writeParsedSection(&b, report, verbosity)
-	ruleChecks := checkreport.ChecksForVerbosity(checkreport.LegacyRuleChecks(report.Stages), verbosity)
-	if len(ruleChecks) > 0 {
-		writeRulesSection(&b, ruleChecks)
-	}
-	if len(report.Findings) > 0 {
-		writeFindingsSection(&b, "Problems", report.Findings)
-	}
-	if len(report.SuppressedFindings) > 0 {
-		writeFindingsSection(&b, "Ignored Problems", report.SuppressedFindings)
-	}
-	return b.String()
+	ruleChecks := checkreport.ChecksForVerbosity(checkreport.ChecksByMeta(report.Stages, "kind", "rule"), verbosity)
+	return checkreport.RenderDetail(r.Summary(), verbosity,
+		checkreport.DetailSection{Render: func(b *strings.Builder) { writeTargetSection(b, report, verbosity) }},
+		checkreport.DetailSection{Render: func(b *strings.Builder) { writeHTTPSection(b, report, verbosity) }},
+		checkreport.DetailSection{Render: func(b *strings.Builder) { writeParsedSection(b, report, verbosity) }},
+		checkreport.DetailSection{Render: func(b *strings.Builder) { checkreport.WriteRuleChecksSection(b, "rules", ruleChecks) }},
+		checkreport.DetailSection{Render: func(b *strings.Builder) { checkreport.WriteFindingsSection(b, "problems", report.Findings, false) }},
+		checkreport.DetailSection{Render: func(b *strings.Builder) {
+			checkreport.WriteFindingsSection(b, "ignored_problems", report.SuppressedFindings, true)
+		}},
+	)
 }
 
 func (r *Result) JSON() ([]byte, error) {
 	return r.reportView().JSON()
 }
 
-func ParseOutputMode(raw string) (checkreport.OutputMode, error) {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", string(checkreport.OutputNagios):
-		return checkreport.OutputNagios, nil
-	case string(checkreport.OutputJSON):
-		return checkreport.OutputJSON, nil
-	default:
-		return "", fmt.Errorf("invalid --output %q, expected nagios or json", raw)
-	}
-}
-
 func writeTargetSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
-	stage := checkreport.StageByID(report, "target")
-	if stage == nil || len(checkreport.ChecksForVerbosity(stage.Checks, verbosity)) == 0 {
+	if len(checkreport.StageChecksForVerbosity(report, "target", verbosity)) == 0 {
 		return
 	}
-	b.WriteString("Target:\n")
-	fmt.Fprintf(b, "  - source=%s effective_base=%s requested=%s final=%s status=%s\n",
-		checkreport.TargetValue(report, "source", "-"),
-		checkreport.TargetValue(report, "effective_base", "-"),
-		checkreport.TargetValue(report, "requested", "-"),
-		checkreport.TargetValue(report, "final", "-"),
-		checkreport.MetaValue(report.Meta, "status_code", "-"),
-	)
+	checkreport.WriteFieldsSection(b, "target", []checkreport.SectionField{
+		{Key: "source", Value: checkreport.TargetValue(report, "source", "-")},
+		{Key: "effective_base", Value: checkreport.TargetValue(report, "effective_base", "-")},
+		{Key: "requested", Value: checkreport.TargetValue(report, "requested", "-")},
+		{Key: "final", Value: checkreport.TargetValue(report, "final", "-")},
+		{Key: "status", Value: checkreport.MetaValue(report.Meta, "status_code", "-")},
+	})
 }
 
 func writeHTTPSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
-	traces := checkreport.TracesForVerbosity(report.Traces, verbosity)
-	if len(traces) == 0 {
-		return
-	}
-	b.WriteString("HTTP:\n")
-	for _, trace := range traces {
-		if trace.Kind != "http" {
-			continue
-		}
-		fmt.Fprintf(b, "  - %s\n", trace.Message)
-	}
+	checkreport.WriteTraceMessageSection(b, "http", report.Traces, verbosity, "http")
 }
 
 func writeParsedSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
@@ -106,7 +70,8 @@ func writeParsedSection(b *strings.Builder, report *checkreport.Report, verbosit
 	if len(checks) == 0 {
 		return
 	}
-	b.WriteString("Parsed:\n")
+	b.WriteString(checkreport.SectionTitle("parsed"))
+	b.WriteString(":\n")
 	for _, check := range checks {
 		switch check.ID {
 		case "parsed.absent":
@@ -134,39 +99,8 @@ func writeParsedSection(b *strings.Builder, report *checkreport.Report, verbosit
 	}
 }
 
-func writeRulesSection(b *strings.Builder, checks []checkreport.Check) {
-	b.WriteString("Rules:\n")
-	for _, check := range checks {
-		fmt.Fprintf(b, "  - %s %s: %s [%s]\n",
-			checkreport.LegacyRuleStatus(check),
-			check.ID,
-			check.Message,
-			emptyAsDash(check.Subject),
-		)
-	}
-}
-
-func writeFindingsSection(b *strings.Builder, title string, findings []checkreport.Finding) {
-	b.WriteString(title)
-	b.WriteString(":\n")
-	for _, finding := range findings {
-		prefix := strings.ToUpper(string(finding.Severity))
-		if title == "Ignored Problems" {
-			prefix = "IGNORED " + finding.Code + " original=" + strings.ToUpper(string(finding.Severity))
-			fmt.Fprintf(b, "  - %s: %s [%s]\n", prefix, finding.Message, emptyAsDash(finding.Target))
-			continue
-		}
-		fmt.Fprintf(b, "  - %s %s: %s [%s]\n", prefix, finding.Code, finding.Message, emptyAsDash(finding.Target))
-	}
-}
-
 func (r *Result) addRule(status, name, target, detail string) {
-	r.Rules = append(r.Rules, RuleCheck{
-		Status: status,
-		Name:   name,
-		Target: target,
-		Detail: detail,
-	})
+	r.RuleChecks = append(r.RuleChecks, checkreport.NewRuleCheck(len(r.RuleChecks), status, name, target, detail))
 	r.Report = checkreport.Report{}
 }
 
@@ -184,22 +118,6 @@ func (r *Result) addProblems(problems ...Problem) {
 	for _, p := range problems {
 		r.addProblem(p)
 	}
-}
-
-func makeProblem(cfg Config, slug, url, message string, severityOverride ...Severity) Problem {
-	return finding.Make(cfg.IgnoreErrorSet, slug, url, message, severityOverride...)
-}
-
-func CatalogHasSlug(slug string) bool {
-	return finding.CatalogHasSlug(slug)
-}
-
-func CatalogSlugs() []string {
-	return finding.CatalogSlugs()
-}
-
-func CatalogEntries() []probecli.ErrorSlugDescriptor {
-	return finding.CatalogEntries()
 }
 
 func (r *Result) countProblems(sev Severity) int {
@@ -248,8 +166,4 @@ func (r *Result) finalTarget() string {
 		return r.FinalURL
 	}
 	return r.EffectiveRobotsURL
-}
-
-func severityName(sev Severity) string {
-	return finding.SeverityName(sev)
 }

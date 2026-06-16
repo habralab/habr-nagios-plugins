@@ -2,18 +2,12 @@ package robotsapp
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"io"
-	"strings"
-
-	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
-	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
-	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/robots"
+	"strings"
 )
 
 var robotsRun = robots.Run
@@ -24,33 +18,20 @@ func Run(programName string, args []string) int {
 
 	cfg, err := parseFlags(binName, args)
 	if err != nil {
-		writeEarlyError(robots.Meta.Slug, "", requestedOutputMode, err)
+		fmt.Print(probecli.RenderEarlyError(robots.Meta.Slug, "", requestedOutputMode, err))
 		return robots.ExitUnknown
 	}
 
-	if cfg.ShowVersion {
-		fmt.Println(buildinfo.String(binName))
-		return robots.ExitOK
-	}
-	if cfg.ShowErrorSlugs {
-		fmt.Print(probecli.RenderErrorSlugDescriptors(robots.CatalogEntries()))
-		return robots.ExitOK
-	}
-	if cfg.ShowKnownDirectives {
-		printKnownDirectives()
-		return robots.ExitOK
-	}
-	if cfg.ShowKnownAgents {
-		printKnownAgents()
-		return robots.ExitOK
-	}
-	if cfg.ShowKnownAgentBehaviors {
-		printKnownAgentBehaviors()
-		return robots.ExitOK
-	}
-	if cfg.ShowHelp {
-		printHelp(binName)
-		return robots.ExitOK
+	if output, exitCode, handled := probecli.DispatchToggleActions(
+		probecli.VersionAction(binName, cfg.ShowVersion, robots.ExitOK),
+		probecli.ToggleAction{Enabled: cfg.ShowErrorSlugs, Output: probecli.RenderErrorSlugDescriptors(robots.CatalogEntries()), ExitCode: robots.ExitOK},
+		probecli.ToggleAction{Enabled: cfg.ShowKnownDirectives, Output: renderKnownDirectives(), ExitCode: robots.ExitOK},
+		probecli.ToggleAction{Enabled: cfg.ShowKnownAgents, Output: renderKnownAgents(), ExitCode: robots.ExitOK},
+		probecli.ToggleAction{Enabled: cfg.ShowKnownAgentBehaviors, Output: renderKnownAgentBehaviors(), ExitCode: robots.ExitOK},
+		probecli.ToggleAction{Enabled: cfg.ShowHelp, Output: renderHelp(binName), ExitCode: robots.ExitOK},
+	); handled {
+		fmt.Print(output)
+		return exitCode
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
@@ -58,66 +39,36 @@ func Run(programName string, args []string) int {
 
 	result, err := robotsRun(ctx, cfg)
 	if err != nil {
-		writeEarlyError(robots.Meta.Slug, "", cfg.OutputMode, err)
+		fmt.Print(probecli.RenderEarlyError(robots.Meta.Slug, "", cfg.OutputMode, err))
 		return robots.ExitUnknown
 	}
 
-	if cfg.OutputMode == checkreport.OutputJSON {
-		data, err := result.JSON()
-		if err != nil {
-			fmt.Printf("UNKNOWN - failed to encode JSON output: %v\n", err)
-			return robots.ExitUnknown
-		}
-		fmt.Println(string(data))
-		return result.ExitCode()
+	rendered, exitCode, err := probecli.RenderResult(result, cfg.OutputMode, cfg.Verbosity)
+	if err != nil {
+		fmt.Printf("UNKNOWN - %v\n", err)
+		return robots.ExitUnknown
 	}
-
-	if cfg.Verbosity > 0 {
-		fmt.Print(result.Detail())
-	} else {
-		fmt.Println(result.Summary())
-	}
-	return result.ExitCode()
-}
-
-func writeEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) {
-	if outputMode == checkreport.OutputJSON {
-		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
-		if jsonErr == nil {
-			fmt.Println(string(data))
-			return
-		}
-		fmt.Printf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
-		return
-	}
-	fmt.Printf("UNKNOWN - %v\n", err)
+	fmt.Print(rendered)
+	return exitCode
 }
 
 func parseFlags(binName string, args []string) (robots.Config, error) {
-	normalizedArgs, baseVerbosity, err := verbosity.NormalizeArgs(args)
+	fs, common, err := probecli.NewCommonFlagSet(binName, args)
 	if err != nil {
 		return robots.Config{}, err
 	}
 
-	fs := flag.NewFlagSet(binName, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
 	cfg := robots.DefaultConfig()
-	var timeout string
-	var verbosityFlag int
 	var requireUserAgents string
 	var requireDisallows string
 	var forbidDisallows string
-	var ignoreErrors string
 	var behaviorProfile string
-	var output string
 
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.URL, "u", "", "full base URL used for discovery, e.g. https://example.com")
 	fs.StringVar(&cfg.URL, "url", "", "full base URL used for discovery, e.g. https://example.com")
 	fs.StringVar(&cfg.RobotsURL, "robots-url", "", "explicit robots.txt URL")
-	fs.StringVar(&output, "output", "nagios", "output mode: nagios|json")
 	fs.BoolVar(&cfg.Strict, "strict", false, "enable stricter policy interpretation")
 	fs.StringVar(&behaviorProfile, "behavior-profile", string(robots.BehaviorProfileRFC), "documented crawler behavior profile: rfc, vendor-aware, strict")
 	fs.BoolVar(&cfg.RequireSitemap, "require-sitemap", false, "require at least one Sitemap directive")
@@ -126,34 +77,27 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	fs.StringVar(&forbidDisallows, "forbid-disallow", "", "comma-separated Disallow values that must not exist")
 	fs.StringVar(&cfg.HTTP.UserAgent, "user-agent", httpx.DefaultUserAgent(), "HTTP User-Agent")
 	fs.BoolVar(&cfg.HTTP.InsecureSkipVerify, "insecure-skip-verify", false, "disable TLS certificate verification for HTTP requests")
-	fs.StringVar(&timeout, "t", "30s", "overall timeout")
-	fs.StringVar(&timeout, "timeout", "30s", "overall timeout")
-	fs.StringVar(&ignoreErrors, "ignore-errors", "", "comma-separated error slugs to suppress")
-	fs.IntVar(&verbosityFlag, "v", 0, "verbosity level 0..3")
-	fs.IntVar(&verbosityFlag, "verbose", 0, "verbosity level 0..3")
-	fs.BoolVar(&cfg.ShowHelp, "h", false, "show help")
-	fs.BoolVar(&cfg.ShowHelp, "help", false, "show help")
-	fs.BoolVar(&cfg.ShowErrorSlugs, "list-error-slugs", false, "list suppressible error slugs and exit")
+	common.Register(fs, "30s")
 	fs.BoolVar(&cfg.ShowKnownDirectives, "list-known-directives", false, "list built-in known robots.txt directives and exit")
 	fs.BoolVar(&cfg.ShowKnownAgents, "list-known-agents", false, "list built-in known crawler and AI agent tokens and exit")
 	fs.BoolVar(&cfg.ShowKnownAgentBehaviors, "list-agent-behaviors", false, "list built-in documented crawler behavior claims and exit")
-	fs.BoolVar(&cfg.ShowVersion, "V", false, "show version")
-	fs.BoolVar(&cfg.ShowVersion, "version", false, "show version")
 
-	if err := fs.Parse(normalizedArgs); err != nil {
+	if err := fs.Parse(common.Args()); err != nil {
 		return robots.Config{}, err
 	}
 
-	d, err := probecli.ParseTimeout(timeout, "--timeout")
+	resolved, err := common.Resolve(robots.CatalogHasSlug)
 	if err != nil {
 		return robots.Config{}, err
 	}
-	cfg.Timeout = d
-	cfg.Verbosity = verbosity.Clamp(baseVerbosity + verbosityFlag)
-	cfg.OutputMode, err = robots.ParseOutputMode(output)
-	if err != nil {
-		return robots.Config{}, err
-	}
+	cfg.Timeout = resolved.Timeout
+	cfg.Verbosity = resolved.Verbosity
+	cfg.OutputMode = resolved.OutputMode
+	cfg.IgnoreErrors = resolved.IgnoreErrors
+	cfg.IgnoreErrorSet = resolved.IgnoreErrorSet
+	cfg.ShowHelp = resolved.ShowHelp
+	cfg.ShowVersion = resolved.ShowVersion
+	cfg.ShowErrorSlugs = resolved.ShowErrorSlugs
 	cfg.BehaviorProfile, err = parseBehaviorProfile(behaviorProfile)
 	if err != nil {
 		return robots.Config{}, err
@@ -161,15 +105,20 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	cfg.RequireUserAgents = probecli.SplitCSV(requireUserAgents)
 	cfg.RequireDisallows = probecli.SplitCSV(requireDisallows)
 	cfg.ForbidDisallows = probecli.SplitCSV(forbidDisallows)
-	cfg.IgnoreErrors, cfg.IgnoreErrorSet, err = probecli.BuildIgnoreErrorSet(ignoreErrors, robots.CatalogHasSlug)
-	if err != nil {
-		return robots.Config{}, err
-	}
 
 	return cfg, nil
 }
 
-func printHelp(binName string) {
+func renderHelp(binName string) string {
+	doc := clihelp.Document{
+		ProgramName: binName,
+		Summary:     robots.Meta.Summary,
+		Usage: []string{
+			binName + " -H example.com [options]",
+			binName + " -u https://example.com [options]",
+			binName + " --robots-url https://example.com/robots.txt [options]",
+		},
+	}
 	options := []clihelp.Option{
 		{
 			Short: "-H",
@@ -181,7 +130,7 @@ func printHelp(binName string) {
 				"-H docs.example.net",
 			},
 		},
-		{Short: "-h", Long: "--help", Description: "Show help"},
+		{Short: "-h", Long: "--help", Description: probecli.HelpOptionDescription()},
 		{
 			Short: "-u",
 			Long:  "--url",
@@ -202,11 +151,8 @@ func printHelp(binName string) {
 			},
 		},
 		{
-			Long: "--output",
-			Description: "Output mode.\n" +
-				"nagios emits classic monitoring text.\n" +
-				"json emits the structured robots waterfall report for external renderers.\n" +
-				"Default: nagios.",
+			Long:        "--output",
+			Description: probecli.OutputModeOptionDescription("json emits the structured robots waterfall report for external renderers."),
 			Examples: []string{
 				"--output nagios",
 				"--output json",
@@ -242,9 +188,8 @@ func printHelp(binName string) {
 			},
 		},
 		{
-			Long: "--ignore-errors",
-			Description: "Comma-separated finding slugs to suppress from status aggregation.\n" +
-				"Use --list-error-slugs to see the available values.",
+			Long:        "--ignore-errors",
+			Description: probecli.IgnoreErrorsOptionDescription(),
 			Examples: []string{
 				"--ignore-errors robots_content_type_unexpected,robots_invalid_line",
 			},
@@ -266,32 +211,23 @@ func printHelp(binName string) {
 				"--behavior-profile strict",
 			},
 		},
-		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 30s.", Examples: []string{"-t 30s", "--timeout 120s"}},
-		{Short: "-v", Long: "--verbose", Description: "Increase output detail.\nRepeat up to 3 times for deeper diagnostics.", Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
-		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs with category, default severity, and message, then exit."},
+		{Short: "-t", Long: "--timeout", Description: probecli.TimeoutOptionDescription("30s"), Examples: []string{"-t 30s", "--timeout 120s"}},
+		{Short: "-v", Long: "--verbose", Description: probecli.VerboseOptionDescription(), Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
+		{Long: "--list-error-slugs", Description: probecli.ListErrorSlugsOptionDescription()},
 		{Long: "--list-known-directives", Description: "Print the built-in robots.txt directive registry and exit.\nIncludes core, well-known, vendor, and observed extensions."},
 		{Long: "--list-known-agents", Description: "Print the built-in crawler and AI agent registry and exit."},
 		{Long: "--list-agent-behaviors", Description: "Print the built-in documented crawler behavior matrix and exit.\nUse this to inspect what vendor-aware and strict mode can reason about."},
-		{Short: "-V", Long: "--version", Description: "Show version and build metadata"},
+		{Short: "-V", Long: "--version", Description: probecli.VersionOptionDescription()},
 	}
 	options = append(options, httpx.HelpOptions()...)
-
-	fmt.Printf(`%s
-
-%s
-
-Usage:
-  %s -H example.com [options]
-  %s -u https://example.com [options]
-  %s --robots-url https://example.com/robots.txt [options]
-
-Options:
-%s`, binName, robots.Meta.Summary, binName, binName, binName, clihelp.RenderOptions(options))
+	doc.Options = options
+	return clihelp.RenderDocument(doc)
 }
 
-func printKnownDirectives() {
+func renderKnownDirectives() string {
+	var b strings.Builder
 	for _, spec := range robots.KnownDirectives() {
-		fmt.Printf("%s\tclass=%s\tscope=%s\tprovenance=%s\treference=%s\treference_url=%s\n",
+		fmt.Fprintf(&b, "%s\tclass=%s\tscope=%s\tprovenance=%s\treference=%s\treference_url=%s\n",
 			spec.Name,
 			spec.Class,
 			spec.Scope,
@@ -300,11 +236,13 @@ func printKnownDirectives() {
 			emptyAsDash(spec.ReferenceURL),
 		)
 	}
+	return b.String()
 }
 
-func printKnownAgents() {
+func renderKnownAgents() string {
+	var b strings.Builder
 	for _, spec := range robots.KnownAgents() {
-		fmt.Printf("%s\tvendor=%s\tkind=%s\tprovenance=%s\treference=%s\treference_url=%s\n",
+		fmt.Fprintf(&b, "%s\tvendor=%s\tkind=%s\tprovenance=%s\treference=%s\treference_url=%s\n",
 			spec.Token,
 			spec.Vendor,
 			spec.Kind,
@@ -313,12 +251,14 @@ func printKnownAgents() {
 			emptyAsDash(spec.ReferenceURL),
 		)
 	}
+	return b.String()
 }
 
-func printKnownAgentBehaviors() {
+func renderKnownAgentBehaviors() string {
+	var b strings.Builder
 	for _, spec := range robots.KnownAgentBehaviors() {
 		for _, claim := range spec.Claims {
-			fmt.Printf("%s\tcategory=%s\tsubject=%s\tdisposition=%s\tvalue=%s\treference=%s\treference_url=%s\tnote=%s\n",
+			fmt.Fprintf(&b, "%s\tcategory=%s\tsubject=%s\tdisposition=%s\tvalue=%s\treference=%s\treference_url=%s\tnote=%s\n",
 				spec.Token,
 				claim.Category,
 				claim.Subject,
@@ -330,6 +270,7 @@ func printKnownAgentBehaviors() {
 			)
 		}
 	}
+	return b.String()
 }
 
 func emptyAsDash(value string) string {

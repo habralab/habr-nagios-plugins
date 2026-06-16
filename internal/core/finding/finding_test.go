@@ -2,28 +2,14 @@ package finding
 
 import "testing"
 
-func TestCatalogEntriesExposeStructuredMetadata(t *testing.T) {
-	entries := CatalogEntries()
-	if len(entries) == 0 {
-		t.Fatal("CatalogEntries() returned no entries")
+func TestSeverityName(t *testing.T) {
+	if got, want := SeverityName(SeverityCritical), "CRITICAL"; got != want {
+		t.Fatalf("SeverityName(SeverityCritical) = %q, want %q", got, want)
 	}
-	found := false
-	for _, entry := range entries {
-		if entry.Slug != "robots_fetch_timeout" {
-			continue
-		}
-		found = true
-		if entry.Category != "transport" {
-			t.Fatalf("Category = %q, want transport", entry.Category)
-		}
-		if entry.Severity != "CRITICAL" {
-			t.Fatalf("Severity = %q, want CRITICAL", entry.Severity)
-		}
-		if entry.Message == "" {
-			t.Fatal("Message is empty")
-		}
+	if got, want := SeverityName(SeverityWarning), "WARNING"; got != want {
+		t.Fatalf("SeverityName(SeverityWarning) = %q, want %q", got, want)
 	}
-	if !found {
-		t.Fatal("robots_fetch_timeout not found in CatalogEntries()")
+	if got, want := SeverityName(SeverityOK), "OK"; got != want {
+		t.Fatalf("SeverityName(SeverityOK) = %q, want %q", got, want)
 	}
 }

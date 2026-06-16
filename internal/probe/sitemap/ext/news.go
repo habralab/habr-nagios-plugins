@@ -31,7 +31,7 @@ func (newsValidator) Validate(entry URLEntry) []Issue {
 
 		if !publicationFound || publicationName == "" || publicationLang == "" || publicationDate == "" || title == "" {
 			issues = append(issues, Issue{
-				Code:     "extension_news_invalid",
+				Code:     "sitemap_extension_news_invalid",
 				Message:  "news extension entry missing one or more required tags",
 				Severity: SeverityWarning,
 			})
@@ -39,11 +39,10 @@ func (newsValidator) Validate(entry URLEntry) []Issue {
 	}
 	if count > 1 {
 		issues = append(issues, Issue{
-			Code:     "extension_news_invalid",
+			Code:     "sitemap_extension_news_invalid",
 			Message:  "news extension allows at most one news:news element per url entry",
 			Severity: SeverityWarning,
 		})
 	}
 	return issues
 }
-

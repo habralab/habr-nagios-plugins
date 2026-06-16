@@ -13,4 +13,3 @@ var registry = map[string]Validator{
 	NamespaceVideo: videoValidator{},
 	NamespaceXHTML: xhtmlHreflangValidator{},
 }
-

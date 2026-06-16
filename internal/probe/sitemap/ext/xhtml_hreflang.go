@@ -21,7 +21,7 @@ func (xhtmlHreflangValidator) Validate(entry URLEntry) []Issue {
 
 		if rel != "alternate" || lang == "" || href == "" {
 			issues = append(issues, Issue{
-				Code:     "extension_hreflang_invalid",
+				Code:     "sitemap_extension_hreflang_invalid",
 				Message:  "xhtml hreflang entry must have rel=\"alternate\", hreflang, and href",
 				Severity: SeverityWarning,
 			})
@@ -29,14 +29,14 @@ func (xhtmlHreflangValidator) Validate(entry URLEntry) []Issue {
 		}
 		if !isAbsoluteHTTPURL(href) {
 			issues = append(issues, Issue{
-				Code:     "extension_hreflang_invalid",
+				Code:     "sitemap_extension_hreflang_invalid",
 				Message:  "xhtml hreflang href must be an absolute http/https URL",
 				Severity: SeverityWarning,
 			})
 		}
 		if seen[lang] {
 			issues = append(issues, Issue{
-				Code:     "extension_hreflang_invalid",
+				Code:     "sitemap_extension_hreflang_invalid",
 				Message:  "xhtml hreflang entry duplicates a hreflang value within the same url entry",
 				Severity: SeverityWarning,
 			})
@@ -49,7 +49,7 @@ func (xhtmlHreflangValidator) Validate(entry URLEntry) []Issue {
 
 	if len(seen) > 0 && !selfFound {
 		issues = append(issues, Issue{
-			Code:     "extension_hreflang_invalid",
+			Code:     "sitemap_extension_hreflang_invalid",
 			Message:  "xhtml hreflang set does not include a self-referencing href",
 			Severity: SeverityWarning,
 		})

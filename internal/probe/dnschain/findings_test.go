@@ -1,9 +1,11 @@
 package dnschain
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/msgcatalog"
 )
 
 func TestFindingCatalogContainsCoreCodes(t *testing.T) {
@@ -50,7 +52,23 @@ func TestMakeFindingUsesCatalogDefaults(t *testing.T) {
 	if got, want := f.Severity, checkreport.StatusCritical; got != want {
 		t.Fatalf("Severity = %q, want %q", got, want)
 	}
-	if got, want := f.Message, FindingCatalog["dnschain_root_anchor_mismatch"].DefaultMessage; got != want {
+	if got, want := f.Message, "embedded root trust anchors did not match the published root DNSKEY RRset"; got != want {
 		t.Fatalf("Message = %q, want %q", got, want)
+	}
+}
+
+func TestFindingCatalogMessagesCovered(t *testing.T) {
+	for slug := range FindingCatalog {
+		if _, ok := msgcatalog.DefaultSummary(msgcatalog.Key(slug)); !ok {
+			t.Fatalf("missing default summary for %q", slug)
+		}
+	}
+}
+
+func TestFindingCatalogSlugPrefixes(t *testing.T) {
+	for slug := range FindingCatalog {
+		if !strings.HasPrefix(slug, "dnschain_") {
+			t.Fatalf("slug %q does not use dnschain_ prefix", slug)
+		}
 	}
 }

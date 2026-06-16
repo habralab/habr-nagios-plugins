@@ -3,17 +3,12 @@ package sitemapapp
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"strings"
 
-	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
-	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
-	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
 )
 
@@ -25,27 +20,21 @@ func Run(programName string, args []string) int {
 
 	cfg, err := parseFlags(binName, args)
 	if err != nil {
-		writeEarlyError(sitemap.Meta.Slug, "", requestedOutputMode, err)
+		fmt.Print(probecli.RenderEarlyError(sitemap.Meta.Slug, "", requestedOutputMode, err))
 		return sitemap.ExitUnknown
 	}
 
-	if cfg.ShowVersion {
-		fmt.Println(buildinfo.String(binName))
-		return sitemap.ExitOK
-	}
-
-	if cfg.ShowErrorSlugs {
-		fmt.Print(probecli.RenderErrorSlugDescriptors(sitemap.CatalogEntries()))
-		return sitemap.ExitOK
-	}
-
-	if cfg.ShowHelp {
-		printHelp(binName)
-		return sitemap.ExitOK
+	if output, exitCode, handled := probecli.DispatchToggleActions(
+		probecli.VersionAction(binName, cfg.ShowVersion, sitemap.ExitOK),
+		probecli.ToggleAction{Enabled: cfg.ShowErrorSlugs, Output: probecli.RenderErrorSlugDescriptors(sitemap.CatalogEntries()), ExitCode: sitemap.ExitOK},
+		probecli.ToggleAction{Enabled: cfg.ShowHelp, Output: renderHelp(binName), ExitCode: sitemap.ExitOK},
+	); handled {
+		fmt.Print(output)
+		return exitCode
 	}
 
 	if cfg.Hostname == "" && cfg.URL == "" && cfg.Entrypoint == "" {
-		writeEarlyError(sitemap.Meta.Slug, "", cfg.OutputMode, errors.New("either -H/--hostname, -u/--url or --entrypoint is required"))
+		fmt.Print(probecli.RenderEarlyError(sitemap.Meta.Slug, "", cfg.OutputMode, errors.New("either -H/--hostname, -u/--url or --entrypoint is required")))
 		return sitemap.ExitUnknown
 	}
 
@@ -54,57 +43,27 @@ func Run(programName string, args []string) int {
 
 	result, err := sitemapRun(ctx, cfg)
 	if err != nil {
-		writeEarlyError(sitemap.Meta.Slug, "", cfg.OutputMode, err)
+		fmt.Print(probecli.RenderEarlyError(sitemap.Meta.Slug, "", cfg.OutputMode, err))
 		return sitemap.ExitUnknown
 	}
 
-	if cfg.OutputMode == checkreport.OutputJSON {
-		data, err := result.JSON()
-		if err != nil {
-			fmt.Printf("UNKNOWN - failed to encode JSON output: %v\n", err)
-			return sitemap.ExitUnknown
-		}
-		fmt.Println(string(data))
-		return result.ExitCode()
+	rendered, exitCode, err := probecli.RenderResult(result, cfg.OutputMode, cfg.Verbosity)
+	if err != nil {
+		fmt.Printf("UNKNOWN - %v\n", err)
+		return sitemap.ExitUnknown
 	}
-
-	if cfg.Verbosity > 0 {
-		fmt.Print(result.Detail())
-	} else {
-		fmt.Println(result.Summary())
-	}
-
-	return result.ExitCode()
-}
-
-func writeEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) {
-	if outputMode == checkreport.OutputJSON {
-		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
-		if jsonErr == nil {
-			fmt.Println(string(data))
-			return
-		}
-		fmt.Printf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
-		return
-	}
-	fmt.Printf("UNKNOWN - %v\n", err)
+	fmt.Print(rendered)
+	return exitCode
 }
 
 func parseFlags(binName string, args []string) (sitemap.Config, error) {
-	normalizedArgs, baseVerbosity, err := verbosity.NormalizeArgs(args)
+	fs, common, err := probecli.NewCommonFlagSet(binName, args)
 	if err != nil {
 		return sitemap.Config{}, err
 	}
 
-	fs := flag.NewFlagSet(binName, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
 	cfg := sitemap.DefaultConfig()
-	var timeout string
 	var fallbackPaths string
-	var ignoreErrors string
-	var verbosityFlag int
-	var output string
 
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used for discovery, e.g. example.com")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used for discovery, e.g. example.com")
@@ -112,7 +71,6 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	fs.StringVar(&cfg.URL, "url", "", "full base URL used for discovery, e.g. https://example.com")
 	fs.StringVar(&cfg.Entrypoint, "entrypoint", "", "explicit sitemap entrypoint URL")
 	fs.StringVar(&cfg.RobotsURL, "robots-url", "", "override robots.txt URL")
-	fs.StringVar(&output, "output", "nagios", "output mode: nagios|json")
 	fs.BoolVar(&cfg.Strict, "strict", false, "enforce stricter host/path expectations")
 	fs.BoolVar(&cfg.FallbackProbe, "fallback", true, "probe default sitemap locations when robots.txt has no sitemap")
 	fs.BoolVar(&cfg.AllowCrossHost, "allow-cross-host", false, "allow child sitemap URLs on hosts different from the parent sitemap host")
@@ -121,33 +79,26 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	fs.IntVar(&cfg.MaxURLs, "max-urls", 0, "maximum number of url entries to parse across the tree, 0 disables the limit")
 	fs.StringVar(&cfg.HTTP.UserAgent, "user-agent", httpx.DefaultUserAgent(), "HTTP User-Agent")
 	fs.BoolVar(&cfg.HTTP.InsecureSkipVerify, "insecure-skip-verify", false, "disable TLS certificate verification for HTTP requests")
-	fs.StringVar(&timeout, "t", "60s", "overall timeout")
-	fs.StringVar(&timeout, "timeout", "60s", "overall timeout")
 	fs.StringVar(&fallbackPaths, "fallback-paths", strings.Join(sitemap.DefaultFallbackPaths, ","), "comma-separated fallback paths")
 	fs.StringVar(&cfg.FallbackStatus, "fallback-status", string(sitemap.FallbackWarn), "severity when sitemap is resolved only via fallback: ok|warn")
-	fs.StringVar(&ignoreErrors, "ignore-errors", "", "comma-separated error slugs to suppress")
-	fs.IntVar(&verbosityFlag, "v", 0, "verbosity level 0..3")
-	fs.IntVar(&verbosityFlag, "verbose", 0, "verbosity level 0..3")
-	fs.BoolVar(&cfg.ShowHelp, "h", false, "show help")
-	fs.BoolVar(&cfg.ShowHelp, "help", false, "show help")
-	fs.BoolVar(&cfg.ShowErrorSlugs, "list-error-slugs", false, "list suppressible error slugs and exit")
-	fs.BoolVar(&cfg.ShowVersion, "V", false, "show version")
-	fs.BoolVar(&cfg.ShowVersion, "version", false, "show version")
+	common.Register(fs, "60s")
 
-	if err := fs.Parse(normalizedArgs); err != nil {
+	if err := fs.Parse(common.Args()); err != nil {
 		return sitemap.Config{}, err
 	}
 
-	d, err := probecli.ParseTimeout(timeout, "--timeout")
+	resolved, err := common.Resolve(sitemap.CatalogHasSlug)
 	if err != nil {
 		return sitemap.Config{}, err
 	}
-	cfg.Timeout = d
-	cfg.Verbosity = verbosity.Clamp(baseVerbosity + verbosityFlag)
-	cfg.OutputMode, err = sitemap.ParseOutputMode(output)
-	if err != nil {
-		return sitemap.Config{}, err
-	}
+	cfg.Timeout = resolved.Timeout
+	cfg.Verbosity = resolved.Verbosity
+	cfg.OutputMode = resolved.OutputMode
+	cfg.IgnoreErrors = resolved.IgnoreErrors
+	cfg.IgnoreErrorSet = resolved.IgnoreErrorSet
+	cfg.ShowHelp = resolved.ShowHelp
+	cfg.ShowVersion = resolved.ShowVersion
+	cfg.ShowErrorSlugs = resolved.ShowErrorSlugs
 
 	cfg.FallbackPaths = nil
 	for _, item := range strings.Split(fallbackPaths, ",") {
@@ -167,15 +118,19 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 		return sitemap.Config{}, errors.New("fallback-status must be one of: ok, warn")
 	}
 
-	cfg.IgnoreErrors, cfg.IgnoreErrorSet, err = probecli.BuildIgnoreErrorSet(ignoreErrors, sitemap.CatalogHasSlug)
-	if err != nil {
-		return sitemap.Config{}, err
-	}
-
 	return cfg, nil
 }
 
-func printHelp(binName string) {
+func renderHelp(binName string) string {
+	doc := clihelp.Document{
+		ProgramName: binName,
+		Summary:     sitemap.Meta.Summary,
+		Usage: []string{
+			binName + " -H example.com [options]",
+			binName + " -u https://example.com [options]",
+			binName + " --entrypoint https://example.com/sitemap.xml [options]",
+		},
+	}
 	options := []clihelp.Option{
 		{
 			Long: "--allow-cross-host",
@@ -191,11 +146,8 @@ func printHelp(binName string) {
 			},
 		},
 		{
-			Long: "--output",
-			Description: "Output mode.\n" +
-				"nagios emits classic monitoring text.\n" +
-				"json emits the structured sitemap waterfall report for external renderers.\n" +
-				"Default: nagios.",
+			Long:        "--output",
+			Description: probecli.OutputModeOptionDescription("json emits the structured sitemap waterfall report for external renderers."),
 			Examples: []string{
 				"--output nagios",
 				"--output json",
@@ -217,8 +169,8 @@ func printHelp(binName string) {
 			Long: "--fallback-status",
 			Description: "Severity to use when sitemap discovery succeeds only through fallback probing.\n" +
 				"Accepted values: ok, warn.\n" +
-				"This only changes the severity of fallback_used.\n" +
-				"Use --ignore-errors fallback_used to suppress that finding entirely.",
+				"This only changes the severity of sitemap_fallback_used.\n" +
+				"Use --ignore-errors sitemap_fallback_used to suppress that finding entirely.",
 			Examples: []string{
 				"--fallback-status warn",
 				"--fallback-status ok",
@@ -234,16 +186,15 @@ func printHelp(binName string) {
 				"-H docs.example.net",
 			},
 		},
-		{Short: "-h", Long: "--help", Description: "Show help"},
+		{Short: "-h", Long: "--help", Description: probecli.HelpOptionDescription()},
 		{
-			Long: "--ignore-errors",
-			Description: "Comma-separated finding slugs to suppress from status aggregation.\n" +
-				"Use --list-error-slugs to see the available values.",
+			Long:        "--ignore-errors",
+			Description: probecli.IgnoreErrorsOptionDescription(),
 			Examples: []string{
-				"--ignore-errors fallback_used,content_type_unexpected",
+				"--ignore-errors sitemap_fallback_used,sitemap_content_type_unexpected",
 			},
 		},
-		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs with category, default severity, and message, then exit."},
+		{Long: "--list-error-slugs", Description: probecli.ListErrorSlugsOptionDescription()},
 		{Long: "--max-depth", Description: "Maximum sitemap tree depth before traversal stops.\nUse 0 to disable the limit.", Examples: []string{"--max-depth 0", "--max-depth 8"}},
 		{Long: "--max-files", Description: "Maximum number of sitemap documents to fetch.\nUse 0 to disable the limit.", Examples: []string{"--max-files 0", "--max-files 500"}},
 		{Long: "--max-urls", Description: "Maximum number of URL entries to parse across the whole tree.\nUse 0 to disable the limit.", Examples: []string{"--max-urls 0", "--max-urls 200000"}},
@@ -256,7 +207,7 @@ func printHelp(binName string) {
 		},
 		{Long: "--strict", Description: "Enforce stricter host and path expectations for child sitemap validation.\n" +
 			"Escalate selected scope validation findings from warning to critical."},
-		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 60s.", Examples: []string{"-t 60s", "--timeout 300s"}},
+		{Short: "-t", Long: "--timeout", Description: probecli.TimeoutOptionDescription("60s"), Examples: []string{"-t 60s", "--timeout 300s"}},
 		{
 			Short: "-u",
 			Long:  "--url",
@@ -267,20 +218,10 @@ func printHelp(binName string) {
 				"-u http://docs.example.net",
 			},
 		},
-		{Short: "-v", Long: "--verbose", Description: "Increase output detail.\nRepeat up to 3 times for deeper diagnostics.", Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
-		{Short: "-V", Long: "--version", Description: "Show version and build metadata"},
+		{Short: "-v", Long: "--verbose", Description: probecli.VerboseOptionDescription(), Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
+		{Short: "-V", Long: "--version", Description: probecli.VersionOptionDescription()},
 	}
 	options = append(options, httpx.HelpOptions()...)
-
-	fmt.Printf(`%s
-
-%s
-
-Usage:
-  %s -H example.com [options]
-  %s -u https://example.com [options]
-  %s --entrypoint https://example.com/sitemap.xml [options]
-
-Options:
-%s`, binName, sitemap.Meta.Summary, binName, binName, binName, clihelp.RenderOptions(options))
+	doc.Options = options
+	return clihelp.RenderDocument(doc)
 }

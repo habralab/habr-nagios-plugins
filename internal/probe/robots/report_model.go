@@ -35,13 +35,13 @@ func (r *Result) reportView() *checkreport.Report {
 			{Key: "strict", Value: fmt.Sprintf("%t", r.Config.Strict)},
 		},
 		Metrics: []checkreport.Metric{
-			countMetric("groups", len(r.Groups)),
-			countMetric("sitemaps", len(r.Sitemaps)),
-			countMetric("rules", r.ruleCount()),
-			countMetric("warnings", r.countProblems(SeverityWarning)),
-			countMetric("criticals", r.countProblems(SeverityCritical)),
-			countMetric("ignored", len(r.IgnoredProblems)),
-			countMetric("bytes", r.Perf.Bytes),
+			checkreport.CountMetric("groups", len(r.Groups)),
+			checkreport.CountMetric("sitemaps", len(r.Sitemaps)),
+			checkreport.CountMetric("rules", r.ruleCount()),
+			checkreport.CountMetric("warnings", r.countProblems(SeverityWarning)),
+			checkreport.CountMetric("criticals", r.countProblems(SeverityCritical)),
+			checkreport.CountMetric("ignored", len(r.IgnoredProblems)),
+			checkreport.CountMetric("bytes", r.Perf.Bytes),
 		},
 		Findings:           makeReportFindings(r.Problems),
 		SuppressedFindings: makeReportFindings(r.IgnoredProblems),
@@ -76,10 +76,10 @@ func (r *Result) makeTargetStage() checkreport.Stage {
 		Target: r.finalTarget(),
 		Checks: []checkreport.Check{
 			{
-				ID:      "target.selection",
-				State:   checkreport.CheckPass,
-				Subject: r.finalTarget(),
-				Message: targetSelectionTrace(r.Config, r.EffectiveBaseURL, r.EffectiveRobotsURL),
+				ID:           "target.selection",
+				State:        checkreport.CheckPass,
+				Subject:      r.finalTarget(),
+				Message:      targetSelectionTrace(r.Config, r.EffectiveBaseURL, r.EffectiveRobotsURL),
 				MinVerbosity: 1,
 				Meta: []checkreport.KV{
 					{Key: "source", Value: r.TargetSource},
@@ -91,15 +91,15 @@ func (r *Result) makeTargetStage() checkreport.Stage {
 }
 
 func (r *Result) makeFetchStage() checkreport.Stage {
-	checks := make([]checkreport.Check, 0, len(r.Rules))
-	for i, rule := range r.Rules {
-		if !strings.HasPrefix(rule.Name, "robots.") {
+	checks := make([]checkreport.Check, 0, len(r.RuleChecks))
+	for _, rule := range r.RuleChecks {
+		if !strings.HasPrefix(rule.ID, "robots.") {
 			continue
 		}
-		if rule.Name == "robots.groups" || rule.Name == "robots.parse" {
+		if rule.ID == "robots.groups" || rule.ID == "robots.parse" {
 			continue
 		}
-		checks = append(checks, ruleToCheck(i, rule))
+		checks = append(checks, rule)
 	}
 	status := stageStatusFromChecks(checks, r.FindingsForCategory("transport"))
 	return checkreport.Stage{
@@ -115,10 +115,10 @@ func (r *Result) makeParseStage() checkreport.Stage {
 	checks := make([]checkreport.Check, 0, len(r.Groups)+len(r.Sitemaps)+len(r.Extensions)+len(r.KnownAgents)+2)
 	if r.Absent {
 		checks = append(checks, checkreport.Check{
-			ID:      "parsed.absent",
-			State:   checkreport.CheckNote,
-			Subject: r.finalTarget(),
-			Message: "robots.txt not present, no directives parsed",
+			ID:           "parsed.absent",
+			State:        checkreport.CheckNote,
+			Subject:      r.finalTarget(),
+			Message:      "robots.txt not present, no directives parsed",
 			MinVerbosity: 1,
 		})
 		return checkreport.Stage{
@@ -131,18 +131,18 @@ func (r *Result) makeParseStage() checkreport.Stage {
 	}
 
 	checks = append(checks, checkreport.Check{
-		ID:      "parsed.summary",
-		State:   checkreport.CheckPass,
-		Subject: r.finalTarget(),
-		Message: fmt.Sprintf("encoding=%s lines=%d groups=%d sitemaps=%d rules=%d", r.Encoding, r.RawLines, len(r.Groups), len(r.Sitemaps), r.ruleCount()),
+		ID:           "parsed.summary",
+		State:        checkreport.CheckPass,
+		Subject:      r.finalTarget(),
+		Message:      fmt.Sprintf("encoding=%s lines=%d groups=%d sitemaps=%d rules=%d", r.Encoding, r.RawLines, len(r.Groups), len(r.Sitemaps), r.ruleCount()),
 		MinVerbosity: 1,
 	})
 	for i, group := range r.Groups {
 		check := checkreport.Check{
-			ID:      "parsed.group",
-			State:   checkreport.CheckPass,
-			Subject: fmt.Sprintf("group %d", i+1),
-			Message: fmt.Sprintf("user_agents=%s allow=%d disallow=%d extensions=%d", strings.Join(group.UserAgents, ","), len(group.Allows), len(group.Disallows), len(group.Extensions)),
+			ID:           "parsed.group",
+			State:        checkreport.CheckPass,
+			Subject:      fmt.Sprintf("group %d", i+1),
+			Message:      fmt.Sprintf("user_agents=%s allow=%d disallow=%d extensions=%d", strings.Join(group.UserAgents, ","), len(group.Allows), len(group.Disallows), len(group.Extensions)),
 			MinVerbosity: 1,
 		}
 		for _, ext := range group.Extensions {
@@ -152,29 +152,29 @@ func (r *Result) makeParseStage() checkreport.Stage {
 	}
 	for _, sitemap := range r.Sitemaps {
 		checks = append(checks, checkreport.Check{
-			ID:      "parsed.sitemap",
-			State:   checkreport.CheckPass,
-			Subject: sitemap,
-			Message: fmt.Sprintf("sitemap=%s", sitemap),
+			ID:           "parsed.sitemap",
+			State:        checkreport.CheckPass,
+			Subject:      sitemap,
+			Message:      fmt.Sprintf("sitemap=%s", sitemap),
 			MinVerbosity: 1,
 		})
 	}
 	for _, ext := range r.Extensions {
 		checks = append(checks, checkreport.Check{
-			ID:       "parsed.extension",
-			State:    checkreport.CheckPass,
-			Subject:  ext.Name,
-			Message:  fmt.Sprintf("extension=%s value=%q", ext.Name, ext.Value),
+			ID:           "parsed.extension",
+			State:        checkreport.CheckPass,
+			Subject:      ext.Name,
+			Message:      fmt.Sprintf("extension=%s value=%q", ext.Name, ext.Value),
 			MinVerbosity: 1,
-			Evidence: []checkreport.Evidence{directiveEvidence(ext)},
+			Evidence:     []checkreport.Evidence{directiveEvidence(ext)},
 		})
 	}
 	for _, agent := range r.KnownAgents {
 		check := checkreport.Check{
-			ID:      "parsed.known_agent",
-			State:   checkreport.CheckPass,
-			Subject: agent.Token,
-			Message: fmt.Sprintf("known_agent=%s vendor=%s kind=%s provenance=%s groups=%s count=%d", agent.Token, agent.Spec.Vendor, agent.Spec.Kind, agent.Spec.Provenance, strings.Join(agent.GroupNames, ","), agent.Count),
+			ID:           "parsed.known_agent",
+			State:        checkreport.CheckPass,
+			Subject:      agent.Token,
+			Message:      fmt.Sprintf("known_agent=%s vendor=%s kind=%s provenance=%s groups=%s count=%d", agent.Token, agent.Spec.Vendor, agent.Spec.Kind, agent.Spec.Provenance, strings.Join(agent.GroupNames, ","), agent.Count),
 			MinVerbosity: 1,
 			Evidence: []checkreport.Evidence{
 				{
@@ -206,9 +206,9 @@ func (r *Result) makeParseStage() checkreport.Stage {
 		}
 		checks = append(checks, check)
 	}
-	for i, rule := range r.Rules {
-		if rule.Name == "robots.groups" || rule.Name == "robots.parse" {
-			checks = append(checks, ruleToCheck(i, rule))
+	for _, rule := range r.RuleChecks {
+		if rule.ID == "robots.groups" || rule.ID == "robots.parse" {
+			checks = append(checks, rule)
 		}
 	}
 
@@ -223,10 +223,10 @@ func (r *Result) makeParseStage() checkreport.Stage {
 }
 
 func (r *Result) makePolicyStage() checkreport.Stage {
-	checks := make([]checkreport.Check, 0, len(r.Rules))
-	for i, rule := range r.Rules {
-		if strings.HasPrefix(rule.Name, "policy.") {
-			checks = append(checks, ruleToCheck(i, rule))
+	checks := make([]checkreport.Check, 0, len(r.RuleChecks))
+	for _, rule := range r.RuleChecks {
+		if strings.HasPrefix(rule.ID, "policy.") {
+			checks = append(checks, rule)
 		}
 	}
 	return checkreport.Stage{
@@ -239,10 +239,10 @@ func (r *Result) makePolicyStage() checkreport.Stage {
 }
 
 func (r *Result) makeBehaviorStage() checkreport.Stage {
-	checks := make([]checkreport.Check, 0, len(r.Rules))
-	for i, rule := range r.Rules {
-		if strings.HasPrefix(rule.Name, "behavior.") {
-			checks = append(checks, ruleToCheck(i, rule))
+	checks := make([]checkreport.Check, 0, len(r.RuleChecks))
+	for _, rule := range r.RuleChecks {
+		if strings.HasPrefix(rule.ID, "behavior.") {
+			checks = append(checks, rule)
 		}
 	}
 	return checkreport.Stage{
@@ -304,12 +304,12 @@ func makeHTTPTraces(calls []HTTPCall) []checkreport.TraceEvent {
 			attrs = append(attrs, checkreport.KV{Key: "note", Value: call.Note})
 		}
 		out = append(out, checkreport.TraceEvent{
-			Kind:       "http",
-			StageID:    "fetch",
-			State:      httpTraceState(call),
-			Target:     call.URL,
-			Message:    httpTraceMessage(call),
-			Attributes: attrs,
+			Kind:         "http",
+			StageID:      "fetch",
+			State:        httpTraceState(call),
+			Target:       call.URL,
+			Message:      httpTraceMessage(call),
+			Attributes:   attrs,
 			MinVerbosity: 2,
 		})
 	}
@@ -335,35 +335,6 @@ func httpTraceState(call HTTPCall) checkreport.CheckState {
 		return checkreport.CheckNote
 	}
 	return checkreport.CheckPass
-}
-
-func ruleToCheck(order int, rule RuleCheck) checkreport.Check {
-	check := checkreport.Check{
-		ID:      rule.Name,
-		State:   ruleState(rule.Status),
-		Subject: rule.Target,
-		Message: rule.Detail,
-		Meta: []checkreport.KV{
-			{Key: "order", Value: fmt.Sprintf("%06d", order)},
-			{Key: "legacy_rule", Value: "true"},
-			{Key: "status", Value: rule.Status},
-			{Key: "name", Value: rule.Name},
-		},
-	}
-	return check
-}
-
-func ruleState(status string) checkreport.CheckState {
-	switch strings.ToUpper(status) {
-	case "FAIL":
-		return checkreport.CheckCritical
-	case "WARN":
-		return checkreport.CheckWarning
-	case "PASS":
-		return checkreport.CheckPass
-	default:
-		return checkreport.CheckNote
-	}
 }
 
 func reportStatusFromSeverity(sev Severity) checkreport.Status {
@@ -402,16 +373,6 @@ func stageStatusFromChecks(checks []checkreport.Check, findings []checkreport.Fi
 	return status
 }
 
-func countMetric(name string, value int) checkreport.Metric {
-	v := float64(value)
-	return checkreport.Metric{
-		Name:   name,
-		Type:   "count",
-		Value:  fmt.Sprintf("%d", value),
-		Number: &v,
-	}
-}
-
 func (r *Result) FindingsForCategory(categories ...string) []checkreport.Finding {
 	if len(categories) == 0 {
 		return nil
@@ -422,35 +383,14 @@ func (r *Result) FindingsForCategory(categories ...string) []checkreport.Finding
 	}
 	findings := make([]checkreport.Finding, 0)
 	for _, p := range r.Problems {
-		if spec, ok := findingSpec(p.Code); ok && allowed[spec.Category] {
+		if category, ok := CatalogCategory(p.Code); ok && allowed[category] {
 			findings = append(findings, checkreport.Finding{
 				Code:     p.Code,
 				Severity: reportStatusFromSeverity(p.Severity),
 				Target:   p.URL,
 				Message:  p.Message,
 			})
-			continue
 		}
 	}
 	return findings
-}
-
-func findingSpec(slug string) (spec struct{ Category string }, ok bool) {
-	entry, exists := findingCatalogEntry(slug)
-	if !exists {
-		return spec, false
-	}
-	spec.Category = entry.Category
-	return spec, true
-}
-
-func findingCatalogEntry(slug string) (entry struct{ Category string }, ok bool) {
-	for _, descriptor := range CatalogEntries() {
-		if descriptor.Slug != slug {
-			continue
-		}
-		entry.Category = descriptor.Category
-		return entry, true
-	}
-	return entry, false
 }

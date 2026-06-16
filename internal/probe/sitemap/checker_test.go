@@ -63,7 +63,7 @@ func TestReportViewDoesNotDependOnVerbosityForIgnoredProblems(t *testing.T) {
 		Entrypoints:      []string{"https://example.com/sitemap.xml"},
 		IgnoredProblems: []Problem{{
 			Severity: SeverityWarning,
-			Code:     "fallback_used",
+			Code:     "sitemap_fallback_used",
 			Message:  "sitemap discovered via fallback probing, robots.txt has no Sitemap directive",
 			URL:      "https://example.com/sitemap.xml",
 		}},
@@ -97,7 +97,7 @@ func TestReportViewDoesNotDependOnVerbosityForIgnoredProblems(t *testing.T) {
 	}
 	var foundIgnored bool
 	for _, check := range validation.Checks {
-		if check.ID == "problem.fallback_used" && check.State == checkreport.CheckIgnore {
+		if check.ID == "problem.sitemap_fallback_used" && check.State == checkreport.CheckIgnore {
 			foundIgnored = true
 			break
 		}
@@ -117,8 +117,8 @@ func TestIgnoredFallbackWarningIsReportedSeparately(t *testing.T) {
 	cfg.URL = serverURL
 	cfg.Timeout = 2 * time.Second
 	cfg.Verbosity = 1
-	cfg.IgnoreErrors = []string{"fallback_used"}
-	cfg.IgnoreErrorSet = map[string]bool{"fallback_used": true}
+	cfg.IgnoreErrors = []string{"sitemap_fallback_used"}
+	cfg.IgnoreErrorSet = map[string]bool{"sitemap_fallback_used": true}
 	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/robots.txt":
@@ -143,8 +143,8 @@ func TestIgnoredFallbackWarningIsReportedSeparately(t *testing.T) {
 	if got := len(result.IgnoredProblems); got != 1 {
 		t.Fatalf("IgnoredProblems len = %d, want 1", got)
 	}
-	if got := result.IgnoredProblems[0].Code; got != "fallback_used" {
-		t.Fatalf("Ignored problem slug = %q, want fallback_used", got)
+	if got := result.IgnoredProblems[0].Code; got != "sitemap_fallback_used" {
+		t.Fatalf("Ignored problem slug = %q, want sitemap_fallback_used", got)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestRunDoesNotAcceptHTMLFallbackAsSitemap(t *testing.T) {
 		t.Fatalf("ExitCode = %d, want %d", got, ExitCritical)
 	}
 	if got := result.Summary(); !strings.Contains(got, "no sitemap entrypoint discovered") {
-		t.Fatalf("Summary() = %q, want entrypoint_not_found", got)
+		t.Fatalf("Summary() = %q, want sitemap_entrypoint_not_found", got)
 	}
 }
 
@@ -395,8 +395,8 @@ func TestRunReportsCheckTimeoutInSummaryAndDetail(t *testing.T) {
 	if !strings.Contains(detail, "FAIL check.timeout: check timeout after 5ms while fetching sitemap document") {
 		t.Fatalf("Detail() = %q, want check timeout rule", detail)
 	}
-	if !strings.Contains(detail, "CRITICAL check_timeout: check timeout after 5ms while fetching sitemap document") {
-		t.Fatalf("Detail() = %q, want check_timeout problem", detail)
+	if !strings.Contains(detail, "CRITICAL sitemap_check_timeout: check timeout after 5ms while fetching sitemap document") {
+		t.Fatalf("Detail() = %q, want sitemap_check_timeout problem", detail)
 	}
 	if !strings.Contains(detail, "check timeout: Get") {
 		t.Fatalf("Detail() = %q, want explicit check-timeout HTTP trace note", detail)
@@ -427,8 +427,8 @@ func TestRunReportsNetworkFetchFailureInSummaryAndDetail(t *testing.T) {
 	if !strings.Contains(detail, `FAIL document.fetch: Get "https://probe.test/sitemap.xml": `+networkErr.Error()) {
 		t.Fatalf("Detail() = %q, want fetch failure rule", detail)
 	}
-	if !strings.Contains(detail, `CRITICAL fetch_failed: Get "https://probe.test/sitemap.xml": `+networkErr.Error()) {
-		t.Fatalf("Detail() = %q, want fetch_failed problem", detail)
+	if !strings.Contains(detail, `CRITICAL sitemap_fetch_failed: Get "https://probe.test/sitemap.xml": `+networkErr.Error()) {
+		t.Fatalf("Detail() = %q, want sitemap_fetch_failed problem", detail)
 	}
 	if !strings.Contains(detail, "HTTP:\n") || !strings.Contains(detail, "error: Get") {
 		t.Fatalf("Detail() = %q, want HTTP error trace", detail)
@@ -461,8 +461,8 @@ func TestRunReportsBrokenXMLInSummaryAndDetail(t *testing.T) {
 	if !strings.Contains(detail, "FAIL document.parse: unsupported sitemap document format") {
 		t.Fatalf("Detail() = %q, want parse failure rule", detail)
 	}
-	if !strings.Contains(detail, "CRITICAL xml_parse_failed: document is neither a sitemapindex nor a urlset") {
-		t.Fatalf("Detail() = %q, want xml_parse_failed problem", detail)
+	if !strings.Contains(detail, "CRITICAL sitemap_xml_parse_failed: document is neither a sitemapindex nor a urlset") {
+		t.Fatalf("Detail() = %q, want sitemap_xml_parse_failed problem", detail)
 	}
 }
 
@@ -500,7 +500,7 @@ func TestRunWarnsOnUnexpectedContentType(t *testing.T) {
 	if !strings.Contains(detail, `WARN document.content_type: unexpected content type "text/html" for urlset sitemap`) {
 		t.Fatalf("Detail() = %q, want content type rule", detail)
 	}
-	if !strings.Contains(detail, `WARNING content_type_unexpected: unexpected content type "text/html" for urlset sitemap`) {
+	if !strings.Contains(detail, `WARNING sitemap_content_type_unexpected: unexpected content type "text/html" for urlset sitemap`) {
 		t.Fatalf("Detail() = %q, want content type problem", detail)
 	}
 	if !strings.Contains(detail, "net_bytes=") || !strings.Contains(detail, "raw_bytes=") {
@@ -549,8 +549,8 @@ func TestRunIgnoreErrorsSuppressesFallbackWarningRegardlessOfFallbackStatus(t *t
 	cfg.URL = serverURL
 	cfg.FallbackStatus = string(FallbackWarn)
 	cfg.Verbosity = 1
-	cfg.IgnoreErrors = []string{"fallback_used"}
-	cfg.IgnoreErrorSet = map[string]bool{"fallback_used": true}
+	cfg.IgnoreErrors = []string{"sitemap_fallback_used"}
+	cfg.IgnoreErrorSet = map[string]bool{"sitemap_fallback_used": true}
 	cfg.HTTPClient = newMockHTTPClient(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/robots.txt":
@@ -573,7 +573,7 @@ func TestRunIgnoreErrorsSuppressesFallbackWarningRegardlessOfFallbackStatus(t *t
 		t.Fatalf("IgnoredProblems len = %d, want 1", got)
 	}
 	detail := result.Detail()
-	if !strings.Contains(detail, "Ignored Problems:\n") || !strings.Contains(detail, "IGNORED fallback_used") {
+	if !strings.Contains(detail, "Ignored Problems:\n") || !strings.Contains(detail, "IGNORED sitemap_fallback_used") {
 		t.Fatalf("Detail() = %q, want ignored fallback problem section", detail)
 	}
 }
@@ -594,14 +594,14 @@ func TestRunStrictEscalatesChildScopeViolation(t *testing.T) {
 			strict:       false,
 			wantExitCode: ExitWarning,
 			wantRule:     "WARN child.scope: child sitemap host could not be verified for cross-submit via https://other.test/robots.txt: robots.txt returned HTTP 404",
-			wantProblem:  "WARNING child_scope_invalid: child sitemap host could not be verified for cross-submit via https://other.test/robots.txt: robots.txt returned HTTP 404",
+			wantProblem:  "WARNING sitemap_child_scope_invalid: child sitemap host could not be verified for cross-submit via https://other.test/robots.txt: robots.txt returned HTTP 404",
 		},
 		{
 			name:         "strict",
 			strict:       true,
 			wantExitCode: ExitCritical,
 			wantRule:     "FAIL child.scope: child sitemap host could not be verified for cross-submit via https://other.test/robots.txt: robots.txt returned HTTP 404",
-			wantProblem:  "CRITICAL child_scope_invalid: child sitemap host could not be verified for cross-submit via https://other.test/robots.txt: robots.txt returned HTTP 404",
+			wantProblem:  "CRITICAL sitemap_child_scope_invalid: child sitemap host could not be verified for cross-submit via https://other.test/robots.txt: robots.txt returned HTTP 404",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -680,8 +680,8 @@ func TestRunAcceptsCrossSubmitDelegationForEntryURLsAndCachesRobotsFetch(t *test
 		t.Fatalf("robots.txt fetches = %d, want 1", robotsFetches)
 	}
 	detail := result.Detail()
-	if strings.Contains(detail, "url_scope_invalid") {
-		t.Fatalf("Detail() = %q, want no url_scope_invalid problem", detail)
+	if strings.Contains(detail, "sitemap_url_scope_invalid") {
+		t.Fatalf("Detail() = %q, want no sitemap_url_scope_invalid problem", detail)
 	}
 	if !strings.Contains(detail, "PASS cross_submit.verify: host verified via https://other.test/robots.txt referencing https://probe.test/sitemap.xml [https://other.test/page-1]") {
 		t.Fatalf("Detail() = %q, want explicit cross-submit verification rule", detail)
@@ -724,8 +724,8 @@ func TestRunAllowCrossHostPermitsChildFetchAcrossHosts(t *testing.T) {
 		t.Fatalf("Documents len = %d, want 2", got)
 	}
 	detail := result.Detail()
-	if strings.Contains(detail, "child_scope_invalid") {
-		t.Fatalf("Detail() = %q, want no child_scope_invalid problem", detail)
+	if strings.Contains(detail, "sitemap_child_scope_invalid") {
+		t.Fatalf("Detail() = %q, want no sitemap_child_scope_invalid problem", detail)
 	}
 }
 
@@ -795,7 +795,7 @@ func TestRunWarnsOnCycleDetected(t *testing.T) {
 	if !strings.Contains(detail, "WARN tree.cycle: cyclic sitemap reference detected") {
 		t.Fatalf("Detail() = %q, want cycle rule", detail)
 	}
-	if !strings.Contains(detail, "WARNING cycle_detected: child sitemap \"https://probe.test/root.xml\" points back into the current sitemap chain") {
+	if !strings.Contains(detail, "WARNING sitemap_cycle_detected: child sitemap \"https://probe.test/root.xml\" points back into the current sitemap chain") {
 		t.Fatalf("Detail() = %q, want cycle problem", detail)
 	}
 }
@@ -823,8 +823,8 @@ func TestRunReportsBadStatusInSummaryAndDetail(t *testing.T) {
 	if !strings.Contains(detail, "FAIL document.status: HTTP 400") {
 		t.Fatalf("Detail() = %q, want bad status rule", detail)
 	}
-	if !strings.Contains(detail, "CRITICAL bad_status: HTTP 400") {
-		t.Fatalf("Detail() = %q, want bad_status problem", detail)
+	if !strings.Contains(detail, "CRITICAL sitemap_bad_status: HTTP 400") {
+		t.Fatalf("Detail() = %q, want sitemap_bad_status problem", detail)
 	}
 }
 
@@ -852,8 +852,8 @@ func TestRunReportsTLSTransportFailureInSummaryAndDetail(t *testing.T) {
 	if !strings.Contains(detail, tlsErr.Error()) {
 		t.Fatalf("Detail() = %q, want TLS transport error", detail)
 	}
-	if !strings.Contains(detail, "CRITICAL fetch_failed: Get") {
-		t.Fatalf("Detail() = %q, want fetch_failed classification", detail)
+	if !strings.Contains(detail, "CRITICAL sitemap_fetch_failed: Get") {
+		t.Fatalf("Detail() = %q, want sitemap_fetch_failed classification", detail)
 	}
 }
 
@@ -879,8 +879,8 @@ func TestRunReportsMissingLocInSummaryAndDetail(t *testing.T) {
 		t.Fatalf("Summary() = %q, want missing loc message", got)
 	}
 	detail := result.Detail()
-	if !strings.Contains(detail, "CRITICAL missing_loc: url entry missing loc") {
-		t.Fatalf("Detail() = %q, want missing_loc problem", detail)
+	if !strings.Contains(detail, "CRITICAL sitemap_missing_loc: url entry missing loc") {
+		t.Fatalf("Detail() = %q, want sitemap_missing_loc problem", detail)
 	}
 }
 
@@ -906,8 +906,8 @@ func TestRunReportsInvalidURLValueInSummaryAndDetail(t *testing.T) {
 		t.Fatalf("Summary() = %q, want invalid URL message", got)
 	}
 	detail := result.Detail()
-	if !strings.Contains(detail, `CRITICAL invalid_url: parse "://bad-url": missing protocol scheme`) {
-		t.Fatalf("Detail() = %q, want invalid_url problem", detail)
+	if !strings.Contains(detail, `CRITICAL sitemap_invalid_url: parse "://bad-url": missing protocol scheme`) {
+		t.Fatalf("Detail() = %q, want sitemap_invalid_url problem", detail)
 	}
 }
 
@@ -961,8 +961,8 @@ func TestRunReportsEmptyTextSitemap(t *testing.T) {
 	if got := result.Summary(); !strings.Contains(got, "text sitemap contains no URLs") {
 		t.Fatalf("Summary() = %q, want empty text sitemap message", got)
 	}
-	if detail := result.Detail(); !strings.Contains(detail, "WARNING empty_text_sitemap: text sitemap contains no URLs") {
-		t.Fatalf("Detail() = %q, want empty_text_sitemap problem", detail)
+	if detail := result.Detail(); !strings.Contains(detail, "WARNING sitemap_empty_text_sitemap: text sitemap contains no URLs") {
+		t.Fatalf("Detail() = %q, want sitemap_empty_text_sitemap problem", detail)
 	}
 }
 
@@ -990,8 +990,8 @@ func TestRunReportsTextSitemapScopeViolation(t *testing.T) {
 	if !strings.Contains(detail, "WARN url.scope: entry URL path \"/outside/page-1\" violates sitemap path scope \"/catalog/\"") {
 		t.Fatalf("Detail() = %q, want url.scope rule", detail)
 	}
-	if !strings.Contains(detail, "WARNING url_scope_invalid: entry URL path \"/outside/page-1\" violates sitemap path scope \"/catalog/\"") {
-		t.Fatalf("Detail() = %q, want url_scope_invalid problem", detail)
+	if !strings.Contains(detail, "WARNING sitemap_url_scope_invalid: entry URL path \"/outside/page-1\" violates sitemap path scope \"/catalog/\"") {
+		t.Fatalf("Detail() = %q, want sitemap_url_scope_invalid problem", detail)
 	}
 }
 
@@ -1072,8 +1072,8 @@ func TestRunWarnsOnNonUTF8TextSitemap(t *testing.T) {
 	if got := result.Summary(); !strings.Contains(got, "text sitemap is not valid UTF-8") {
 		t.Fatalf("Summary() = %q, want non-UTF8 text warning", got)
 	}
-	if detail := result.Detail(); !strings.Contains(detail, "WARNING non_utf8_encoding: text sitemap is not valid UTF-8") {
-		t.Fatalf("Detail() = %q, want non_utf8_encoding problem", detail)
+	if detail := result.Detail(); !strings.Contains(detail, "WARNING sitemap_non_utf8_encoding: text sitemap is not valid UTF-8") {
+		t.Fatalf("Detail() = %q, want sitemap_non_utf8_encoding problem", detail)
 	}
 }
 
@@ -1101,8 +1101,8 @@ func TestRunWarnsOnUnescapedTextSitemapURL(t *testing.T) {
 		t.Fatalf("Summary() = %q, want escaped URL warning", got)
 	}
 	detail := result.Detail()
-	if !strings.Contains(detail, "WARNING url_not_escaped: URL contains non-ASCII character 'ü' and should be percent-encoded") {
-		t.Fatalf("Detail() = %q, want url_not_escaped problem", detail)
+	if !strings.Contains(detail, "WARNING sitemap_url_not_escaped: URL contains non-ASCII character 'ü' and should be percent-encoded") {
+		t.Fatalf("Detail() = %q, want sitemap_url_not_escaped problem", detail)
 	}
 }
 
@@ -1169,7 +1169,7 @@ func TestRunReportsBrokenHreflangExtension(t *testing.T) {
 	if !strings.Contains(detail, "WARN extension.xhtml_hreflang: namespace=http://www.w3.org/1999/xhtml entries=2 issues=2") {
 		t.Fatalf("Detail() = %q, want failing hreflang extension rule", detail)
 	}
-	if !strings.Contains(detail, "WARNING extension_hreflang_invalid: xhtml hreflang set does not include a self-referencing href") {
+	if !strings.Contains(detail, "WARNING sitemap_extension_hreflang_invalid: xhtml hreflang set does not include a self-referencing href") {
 		t.Fatalf("Detail() = %q, want hreflang self-link problem", detail)
 	}
 }
@@ -1235,7 +1235,7 @@ func TestRunReportsInvalidImageExtension(t *testing.T) {
 	if got := result.ExitCode(); got != ExitWarning {
 		t.Fatalf("ExitCode = %d, want %d", got, ExitWarning)
 	}
-	if detail := result.Detail(); !strings.Contains(detail, "WARNING extension_image_invalid: image extension entry missing image:loc") {
+	if detail := result.Detail(); !strings.Contains(detail, "WARNING sitemap_extension_image_invalid: image extension entry missing image:loc") {
 		t.Fatalf("Detail() = %q, want image:loc missing problem", detail)
 	}
 }

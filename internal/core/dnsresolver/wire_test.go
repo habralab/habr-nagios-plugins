@@ -2,8 +2,11 @@ package dnsresolver
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -22,15 +25,14 @@ func TestMissingNSNames(t *testing.T) {
 	}
 }
 
-func TestCompleteReferralServersUsesGlueAndResolvedRemainder(t *testing.T) {
+func TestCompleteReferralServersUsesGlueWithoutResolvingRemainder(t *testing.T) {
 	resolver := func(_ context.Context, names []string) ([]nsAddr, error) {
-		if len(names) != 1 || names[0] != "ns3.example.net." {
-			t.Fatalf("resolver names = %#v, want only missing name", names)
-		}
-		return []nsAddr{{Name: "ns3.example.net.", Addr: "192.0.2.3:53"}}, nil
+		t.Fatalf("resolver should not be called when glue is already available, got %v", names)
+		return nil, nil
 	}
 
 	got, err := completeReferralServersWithResolver(context.Background(),
+		"example.com.",
 		[]string{"ns1.example.net.", "ns2.example.net.", "ns3.example.net."},
 		[]nsAddr{
 			{Name: "ns1.example.net.", Addr: "192.0.2.1:53"},
@@ -41,8 +43,72 @@ func TestCompleteReferralServersUsesGlueAndResolvedRemainder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completeReferralServersWithResolver() error = %v", err)
 	}
-	if gotLen := len(got); gotLen != 3 {
-		t.Fatalf("completeReferralServersWithResolver() len = %d, want 3", gotLen)
+	if gotLen := len(got); gotLen != 2 {
+		t.Fatalf("completeReferralServersWithResolver() len = %d, want 2", gotLen)
+	}
+}
+
+func TestCompleteReferralServersResolvesOutOfBailiwickNamesWhenGlueIsAbsent(t *testing.T) {
+	resolver := func(_ context.Context, names []string) ([]nsAddr, error) {
+		if len(names) != 1 || names[0] != "ns3.example.net." {
+			t.Fatalf("resolver names = %#v, want only missing name", names)
+		}
+		return []nsAddr{{Name: "ns3.example.net.", Addr: "192.0.2.3:53"}}, nil
+	}
+
+	got, err := completeReferralServersWithResolver(context.Background(),
+		"example.com.",
+		[]string{"ns3.example.net."},
+		nil,
+		resolver,
+	)
+	if err != nil {
+		t.Fatalf("completeReferralServersWithResolver() error = %v", err)
+	}
+	if gotLen := len(got); gotLen != 1 {
+		t.Fatalf("completeReferralServersWithResolver() len = %d, want 1", gotLen)
+	}
+}
+
+func TestCompleteReferralServersSkipsInBailiwickNamesWithoutGlue(t *testing.T) {
+	resolver := func(_ context.Context, names []string) ([]nsAddr, error) {
+		if len(names) != 1 || names[0] != "dns2.easydns.net." {
+			t.Fatalf("resolver names = %#v, want only out-of-bailiwick remainder", names)
+		}
+		return []nsAddr{{Name: "dns2.easydns.net.", Addr: "192.0.2.53:53"}}, nil
+	}
+
+	got, err := completeReferralServersWithResolver(context.Background(),
+		"easydns.com.",
+		[]string{"dns1.easydns.com.", "dns2.easydns.net."},
+		nil,
+		resolver,
+	)
+	if err != nil {
+		t.Fatalf("completeReferralServersWithResolver() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "dns2.easydns.net." {
+		t.Fatalf("completeReferralServersWithResolver() = %#v, want dns2.easydns.net only", got)
+	}
+}
+
+func TestCompleteReferralServersFailsWhenOnlyInBailiwickNamesLackGlue(t *testing.T) {
+	resolver := func(_ context.Context, names []string) ([]nsAddr, error) {
+		t.Fatalf("resolver should not be called for in-bailiwick-only referral, got %v", names)
+		return nil, nil
+	}
+
+	_, err := completeReferralServersWithResolver(context.Background(),
+		"example.com.",
+		[]string{"ns1.example.com.", "ns2.example.com."},
+		nil,
+		resolver,
+	)
+	if err == nil {
+		t.Fatal("completeReferralServersWithResolver() error = nil, want glue/bootstrap error")
+	}
+	if !strings.Contains(err.Error(), "missing glue for in-bailiwick name servers") {
+		t.Fatalf("error = %q, want missing glue message", err)
 	}
 }
 
@@ -126,5 +192,75 @@ func TestBuildZoneChainWithResolverHandlesAuthoritativeAnswerDelegation(t *testi
 	}
 	if len(hops[1].ChildServers) != 1 || hops[1].ChildServers[0].Addr != exampleServer.Addr {
 		t.Fatalf("second hop child servers = %#v, want %#v", hops[1].ChildServers, []nsAddr{exampleServer})
+	}
+}
+
+func TestQueryAnyWithExchangerReturnsFirstSuccess(t *testing.T) {
+	exchanger := func(ctx context.Context, server, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+		switch server {
+		case "192.0.2.1:53", "192.0.2.3:53":
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case "192.0.2.2:53":
+			msg := &dns.Msg{MsgHdr: dns.MsgHdr{Authoritative: true}}
+			msg.Answer = []dns.RR{
+				&dns.A{Hdr: dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.IPv4(203, 0, 113, 10)},
+			}
+			return &exchangeResult{Server: nsAddr{Name: "ns2.example.", Addr: server}, Network: "udp", Msg: msg}, nil
+		default:
+			return nil, errors.New("unexpected server")
+		}
+	}
+
+	servers := []nsAddr{
+		{Name: "ns1.example.", Addr: "192.0.2.1:53"},
+		{Name: "ns2.example.", Addr: "192.0.2.2:53"},
+		{Name: "ns3.example.", Addr: "192.0.2.3:53"},
+	}
+
+	started := time.Now()
+	got, err := queryAnyWithExchanger(context.Background(), servers, "www.example.com.", dns.TypeA, true, exchanger)
+	if err != nil {
+		t.Fatalf("queryAnyWithExchanger() error = %v", err)
+	}
+	if got.Server.Addr != "192.0.2.2:53" {
+		t.Fatalf("server = %q, want 192.0.2.2:53", got.Server.Addr)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("queryAnyWithExchanger() took %s, want early return", elapsed)
+	}
+}
+
+func TestResolveNameServersBestEffortWithResolverStopsAtQuorum(t *testing.T) {
+	addrResolver := func(ctx context.Context, name string) ([]string, error) {
+		switch dns.Fqdn(name) {
+		case "ns1.example.net.":
+			time.Sleep(20 * time.Millisecond)
+			return []string{"192.0.2.1:53"}, nil
+		case "ns2.example.net.":
+			time.Sleep(20 * time.Millisecond)
+			return []string{"192.0.2.2:53"}, nil
+		case "ns3.example.net.":
+			<-ctx.Done()
+			return nil, ctx.Err()
+		default:
+			return nil, errors.New("unexpected name")
+		}
+	}
+
+	started := time.Now()
+	got, err := resolveNameServersBestEffortWithResolver(context.Background(),
+		[]string{"ns1.example.net.", "ns2.example.net.", "ns3.example.net."},
+		2,
+		addrResolver,
+	)
+	if err != nil {
+		t.Fatalf("resolveNameServersBestEffortWithResolver() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2 (%#v)", len(got), got)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("resolveNameServersBestEffortWithResolver() took %s, want early return", elapsed)
 	}
 }

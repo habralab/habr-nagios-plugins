@@ -22,7 +22,7 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 		"--allow-cross-host",
 		"--fallback-status", "ok",
 		"--fallback-paths", "/sitemap.xml,/sitemap.xml.gz",
-		"--ignore-errors", "fallback_used,content_type_unexpected",
+		"--ignore-errors", "sitemap_fallback_used,sitemap_content_type_unexpected",
 		"--insecure-skip-verify",
 		"--max-depth", "5",
 		"--max-files", "10",
@@ -73,7 +73,7 @@ func TestParseFlagsCoversCommonOptions(t *testing.T) {
 	if got, want := len(cfg.IgnoreErrors), 2; got != want {
 		t.Fatalf("IgnoreErrors len = %d, want %d", got, want)
 	}
-	if !cfg.IgnoreErrorSet["fallback_used"] || !cfg.IgnoreErrorSet["content_type_unexpected"] {
+	if !cfg.IgnoreErrorSet["sitemap_fallback_used"] || !cfg.IgnoreErrorSet["sitemap_content_type_unexpected"] {
 		t.Fatalf("IgnoreErrorSet missing expected slugs: %+v", cfg.IgnoreErrorSet)
 	}
 }
@@ -102,9 +102,9 @@ func TestRunListErrorSlugs(t *testing.T) {
 		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
 	}
 	for _, snippet := range []string{
-		"fallback_used",
+		"sitemap_fallback_used",
 		"discovery",
-		"fetch_failed",
+		"sitemap_fetch_failed",
 		"transport",
 	} {
 		if !strings.Contains(output, snippet) {
@@ -182,7 +182,7 @@ func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
 		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
 	}
 	wantSnippets := []string{
-		"Use --ignore-errors fallback_used to suppress that finding entirely.",
+		"Use --ignore-errors sitemap_fallback_used to suppress that finding entirely.",
 		"Use --list-error-slugs to see the available values.",
 		"When both --url and --hostname are provided, --url wins.",
 		"Escalate selected scope validation findings from warning to critical.",
@@ -221,7 +221,7 @@ func TestRunJSONOutput(t *testing.T) {
 		}
 		result.Problems = []sitemap.Problem{{
 			Severity: sitemap.SeverityWarning,
-			Code:     "fallback_used",
+			Code:     "sitemap_fallback_used",
 			Message:  "sitemap discovered via fallback probing, robots.txt has no Sitemap directive",
 			URL:      "https://example.com/sitemap.xml",
 		}}
@@ -242,8 +242,8 @@ func TestRunJSONOutput(t *testing.T) {
 	if got, want := report.Status, checkreport.StatusWarning; got != want {
 		t.Fatalf("report.Status = %q, want %q", got, want)
 	}
-	if len(report.Findings) == 0 || report.Findings[0].Code != "fallback_used" {
-		t.Fatalf("report.Findings = %#v, want fallback_used", report.Findings)
+	if len(report.Findings) == 0 || report.Findings[0].Code != "sitemap_fallback_used" {
+		t.Fatalf("report.Findings = %#v, want sitemap_fallback_used", report.Findings)
 	}
 }
 

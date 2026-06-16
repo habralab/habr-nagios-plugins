@@ -14,6 +14,31 @@ type Option struct {
 	Examples    []string
 }
 
+type Document struct {
+	ProgramName string
+	Summary     string
+	Usage       []string
+	Options     []Option
+}
+
+func RenderDocument(doc Document) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(doc.ProgramName))
+	b.WriteString("\n\n")
+	b.WriteString(strings.TrimSpace(doc.Summary))
+	b.WriteString("\n\n")
+	b.WriteString("Usage:\n")
+	for _, line := range doc.Usage {
+		b.WriteString("  ")
+		b.WriteString(strings.TrimSpace(line))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	b.WriteString("Options:\n")
+	b.WriteString(RenderOptions(doc.Options))
+	return b.String()
+}
+
 func RenderOptions(options []Option) string {
 	items := append([]Option(nil), options...)
 	sort.Slice(items, func(i, j int) bool {
