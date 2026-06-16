@@ -24,7 +24,7 @@ func TestOwnerEndpointStateCollectsTerminalAddressRecords(t *testing.T) {
 		},
 	}
 
-	state := ownerEndpointState(owner, aMsg, aaaaMsg)
+	state := ownerEndpointState(owner, aMsg.Answer, aaaaMsg.Answer)
 	if len(state.ARecords) != 1 || state.ARecords[0] != "192.0.2.10" {
 		t.Fatalf("ARecords = %#v, want [192.0.2.10]", state.ARecords)
 	}
@@ -51,7 +51,7 @@ func TestOwnerEndpointStateCollectsCNAMEWithoutTargetAddresses(t *testing.T) {
 		},
 	}
 
-	state := ownerEndpointState(owner, aMsg)
+	state := ownerEndpointState(owner, aMsg.Answer)
 	if len(state.CNAMETargets) != 1 || state.CNAMETargets[0] != target {
 		t.Fatalf("CNAMETargets = %#v, want [%s]", state.CNAMETargets, target)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/miekg/dns"
 )
 
@@ -36,12 +37,12 @@ func TestMatchingDNSKEYsAcceptsAnyMatchingDSDuringRollover(t *testing.T) {
 		t.Fatal("stale.ToDS() = nil")
 	}
 
-	got := matchingDNSKEYs([]*dns.DS{staleDS, activeDS}, []*dns.DNSKEY{active})
+	got := dnsresolver.MatchDNSKEYs([]*dns.DS{staleDS, activeDS}, []*dns.DNSKEY{active})
 	if len(got) != 1 {
-		t.Fatalf("matchingDNSKEYs() len = %d, want 1", len(got))
+		t.Fatalf("dnsresolver.MatchDNSKEYs() len = %d, want 1", len(got))
 	}
 	if got[0].PublicKey != active.PublicKey {
-		t.Fatalf("matchingDNSKEYs() matched unexpected key %q", got[0].PublicKey)
+		t.Fatalf("dnsresolver.MatchDNSKEYs() matched unexpected key %q", got[0].PublicKey)
 	}
 }
 
@@ -70,9 +71,9 @@ func TestMatchingDNSKEYsReturnsAllMatchingKeys(t *testing.T) {
 		t.Fatal("keyB.ToDS() = nil")
 	}
 
-	got := matchingDNSKEYs([]*dns.DS{dsA, dsB}, []*dns.DNSKEY{keyA, keyB})
+	got := dnsresolver.MatchDNSKEYs([]*dns.DS{dsA, dsB}, []*dns.DNSKEY{keyA, keyB})
 	if len(got) != 2 {
-		t.Fatalf("matchingDNSKEYs() len = %d, want 2", len(got))
+		t.Fatalf("dnsresolver.MatchDNSKEYs() len = %d, want 2", len(got))
 	}
 }
 

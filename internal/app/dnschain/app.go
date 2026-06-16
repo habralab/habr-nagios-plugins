@@ -97,8 +97,8 @@ func parseFlags(binName string, args []string) (dnschain.Config, bool, bool, err
 	fs.StringVar(&cfg.Hostname, "H", "", "hostname used as the DNS target")
 	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used as the DNS target")
 	fs.StringVar(&cfg.Zone, "zone", "", "explicit DNS zone target")
-	fs.StringVar(&timeout, "t", "30s", "overall timeout")
-	fs.StringVar(&timeout, "timeout", "30s", "overall timeout")
+	fs.StringVar(&timeout, "t", "60s", "overall timeout")
+	fs.StringVar(&timeout, "timeout", "60s", "overall timeout")
 	fs.StringVar(&queryTimeout, "query-timeout", "3s", "per DNS query timeout")
 	fs.StringVar(&output, "output", "nagios", "output mode: nagios|json")
 	fs.StringVar(&ignoreErrors, "ignore-errors", "", "comma-separated error slugs to suppress")
@@ -186,7 +186,7 @@ func printHelp(binName string) {
 			},
 		},
 		{Long: "--list-error-slugs", Description: "Print the available suppressible error slugs with category, default severity, and message, then exit."},
-		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 30s.", Examples: []string{"-t 30s", "--timeout 120s"}},
+		{Short: "-t", Long: "--timeout", Description: "Overall check timeout.\nDefault: 60s.", Examples: []string{"-t 60s", "--timeout 120s"}},
 		{Short: "-v", Long: "--verbose", Description: "Increase output detail.\nRepeat up to 3 times for deeper diagnostics.", Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
 		{Short: "-h", Long: "--help", Description: "Show help"},
 		{Short: "-V", Long: "--version", Description: "Show version and build metadata"},

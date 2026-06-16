@@ -1,4 +1,4 @@
-package dnschain
+package dnsresolver
 
 import (
 	"context"
@@ -106,6 +106,9 @@ func dnsQueryTimeoutFromContext(ctx context.Context) time.Duration {
 }
 
 func queryAny(ctx context.Context, servers []nsAddr, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+	if caps, ok := resolverFamilyConstraintsFromContext(ctx); ok {
+		servers = filterNSAddrsByCapabilities(servers, caps)
+	}
 	var errs []string
 	for _, server := range servers {
 		res, err := exchangeDNS(ctx, server.Addr, qname, qtype, do)

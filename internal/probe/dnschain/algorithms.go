@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/miekg/dns"
 )
 
@@ -247,13 +248,13 @@ func verifiedSEPMaterial(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dns.RR
 	activeDS := map[string]*dns.DS{}
 	unsupported := map[uint8]bool{}
 	for _, ds := range dsRecords {
-		for _, key := range matchingDNSKEYs([]*dns.DS{ds}, keys) {
+		for _, key := range dnsresolver.MatchDNSKEYs([]*dns.DS{ds}, keys) {
 			sawUnsupported := false
 			for _, sig := range sigs {
 				if sig.KeyTag != key.KeyTag() || !sig.ValidityPeriod(now) {
 					continue
 				}
-				err := sig.Verify(key, dnskeysToRRs(keys))
+				err := sig.Verify(key, dnsresolver.DNSKEYRRs(keys))
 				if err == nil {
 					verified[key.KeyTag()] = key
 					activeDS[dsIdentity(ds)] = ds

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/miekg/dns"
 )
 
@@ -24,7 +25,7 @@ type ownerEndpointResult struct {
 	Fingerprint  string
 }
 
-func probeOwnerName(ctx context.Context, owner, zone string, servers []nsAddr) (checkreport.Stage, ownerProbeResult) {
+func probeOwnerName(ctx context.Context, resolver *dnsresolver.Resolver, owner, zone string, servers []nsAddr) (checkreport.Stage, ownerProbeResult) {
 	stage := checkreport.Stage{
 		ID:     "owner.rrset",
 		Title:  "Owner RRset",
@@ -37,21 +38,52 @@ func probeOwnerName(ctx context.Context, owner, zone string, servers []nsAddr) (
 	var sawCNAME bool
 	var sawAddress bool
 	var sawForeignZoneCNAME bool
+	authority := authoritativeServers(servers)
+	aResults, err := resolver.ResolveAuthoritative(ctx, owner, dns.TypeA, authority, dnsresolver.ResolveOptions{
+		Fanout: dnsresolver.FanoutAllAuthoritative,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "owner.a",
+			State:   checkreport.CheckUnknown,
+			Subject: owner,
+			Message: fmt.Sprintf("authoritative A fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_owner_probe_failed", owner, fmt.Sprintf("authoritative A fanout failed: %v", err)))
+		return stage, result
+	}
+	aaaaResults, err := resolver.ResolveAuthoritative(ctx, owner, dns.TypeAAAA, authority, dnsresolver.ResolveOptions{
+		Fanout: dnsresolver.FanoutAllAuthoritative,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "owner.aaaa",
+			State:   checkreport.CheckUnknown,
+			Subject: owner,
+			Message: fmt.Sprintf("authoritative AAAA fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_owner_probe_failed", owner, fmt.Sprintf("authoritative AAAA fanout failed: %v", err)))
+		return stage, result
+	}
+	aByEndpoint := responsesByEndpoint(aResults)
+	aaaaByEndpoint := responsesByEndpoint(aaaaResults)
 
 	for _, endpoint := range uniqueNSAddrs(servers) {
-		var aMsg *dns.Msg
-		var aaaaMsg *dns.Msg
+		var aMsg []dns.RR
+		var aaaaMsg []dns.RR
 
-		aRes, err := exchangeDNS(ctx, endpoint.Addr, owner, dns.TypeA, true)
-		if err != nil {
-			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", owner, fmt.Sprintf("owner A query failed via %s: %v", endpoint.Addr, err)))
+		aRes, aSeen := aByEndpoint[endpoint.Addr]
+		if aSeen && aRes.Error != "" {
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", owner, fmt.Sprintf("owner A query failed via %s: %s", endpoint.Addr, aRes.Error)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "owner.a",
 				State:   checkreport.CheckWarning,
 				Subject: endpoint.Addr,
-				Message: fmt.Sprintf("A query failed: %v", err),
+				Message: fmt.Sprintf("A query failed: %s", aRes.Error),
 			})
-		} else if !aRes.Msg.Authoritative {
+		} else if aSeen && !aRes.Authoritative {
 			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_rrset_failed", owner, fmt.Sprintf("owner A response via %s was not authoritative", endpoint.Addr)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "owner.a",
@@ -60,19 +92,19 @@ func probeOwnerName(ctx context.Context, owner, zone string, servers []nsAddr) (
 				Message: "A response was not authoritative",
 			})
 		} else {
-			aMsg = aRes.Msg
+			aMsg = aRes.Records
 		}
 
-		aaaaRes, err := exchangeDNS(ctx, endpoint.Addr, owner, dns.TypeAAAA, true)
-		if err != nil {
-			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", owner, fmt.Sprintf("owner AAAA query failed via %s: %v", endpoint.Addr, err)))
+		aaaaRes, aaaaSeen := aaaaByEndpoint[endpoint.Addr]
+		if aaaaSeen && aaaaRes.Error != "" {
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", owner, fmt.Sprintf("owner AAAA query failed via %s: %s", endpoint.Addr, aaaaRes.Error)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "owner.aaaa",
 				State:   checkreport.CheckWarning,
 				Subject: endpoint.Addr,
-				Message: fmt.Sprintf("AAAA query failed: %v", err),
+				Message: fmt.Sprintf("AAAA query failed: %s", aaaaRes.Error),
 			})
-		} else if !aaaaRes.Msg.Authoritative {
+		} else if aaaaSeen && !aaaaRes.Authoritative {
 			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_rrset_failed", owner, fmt.Sprintf("owner AAAA response via %s was not authoritative", endpoint.Addr)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "owner.aaaa",
@@ -81,7 +113,7 @@ func probeOwnerName(ctx context.Context, owner, zone string, servers []nsAddr) (
 				Message: "AAAA response was not authoritative",
 			})
 		} else {
-			aaaaMsg = aaaaRes.Msg
+			aaaaMsg = aaaaRes.Records
 		}
 
 		if aMsg == nil && aaaaMsg == nil {
@@ -91,7 +123,7 @@ func probeOwnerName(ctx context.Context, owner, zone string, servers []nsAddr) (
 		ownerState := ownerEndpointState(owner, aMsg, aaaaMsg)
 		ownerState.Endpoint = endpoint
 		if len(ownerState.CNAMETargets) > 0 && !ownerState.HasTerminalAddress() {
-			ownerState = followSameZoneCNAMETerminal(ctx, endpoint, zone, ownerState, &stage, &result)
+			ownerState = followSameZoneCNAMETerminal(ctx, resolver, endpoint, zone, ownerState, &stage, &result)
 			if len(ownerState.CNAMETargets) > 0 && !ownerState.HasTerminalAddress() && !allTargetsWithinZone(ownerState.CNAMETargets, zone) {
 				sawForeignZoneCNAME = true
 			}
@@ -168,18 +200,18 @@ func probeOwnerName(ctx context.Context, owner, zone string, servers []nsAddr) (
 	return stage, result
 }
 
-func ownerEndpointState(owner string, msgs ...*dns.Msg) ownerEndpointResult {
+func ownerEndpointState(owner string, rrsets ...[]dns.RR) ownerEndpointResult {
 	state := ownerEndpointResult{}
 	cnameSet := map[string]bool{}
 	aSet := map[string]bool{}
 	aaaaSet := map[string]bool{}
 	fqdnOwner := dns.Fqdn(owner)
 
-	for _, msg := range msgs {
-		if msg == nil {
+	for _, rrset := range rrsets {
+		if rrset == nil {
 			continue
 		}
-		for _, rr := range msg.Answer {
+		for _, rr := range rrset {
 			switch v := rr.(type) {
 			case *dns.CNAME:
 				if dns.Fqdn(v.Header().Name) == fqdnOwner {
@@ -251,7 +283,7 @@ func (state ownerEndpointResult) HasTerminalAddress() bool {
 	return len(state.ARecords) > 0 || len(state.AAAARecords) > 0
 }
 
-func followSameZoneCNAMETerminal(ctx context.Context, endpoint nsAddr, zone string, state ownerEndpointResult, stage *checkreport.Stage, result *ownerProbeResult) ownerEndpointResult {
+func followSameZoneCNAMETerminal(ctx context.Context, resolver *dnsresolver.Resolver, endpoint nsAddr, zone string, state ownerEndpointResult, stage *checkreport.Stage, result *ownerProbeResult) ownerEndpointResult {
 	visited := map[string]bool{}
 	if state.AddressOwner != "" {
 		visited[dns.Fqdn(state.AddressOwner)] = true
@@ -265,10 +297,12 @@ func followSameZoneCNAMETerminal(ctx context.Context, endpoint nsAddr, zone stri
 		}
 		visited[target] = true
 
-		var aMsg *dns.Msg
-		var aaaaMsg *dns.Msg
+		var aMsg []dns.RR
+		var aaaaMsg []dns.RR
 
-		aRes, err := exchangeDNS(ctx, endpoint.Addr, target, dns.TypeA, true)
+		aResolved, err := resolver.ResolveAuthoritative(ctx, target, dns.TypeA, []dnsresolver.AuthoritativeServer{{Name: endpoint.Name, Endpoint: endpoint.Addr}}, dnsresolver.ResolveOptions{
+			Fanout: dnsresolver.FanoutAllAuthoritative,
+		})
 		if err != nil {
 			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", target, fmt.Sprintf("terminal A query failed via %s: %v", endpoint.Addr, err)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
@@ -277,7 +311,23 @@ func followSameZoneCNAMETerminal(ctx context.Context, endpoint nsAddr, zone stri
 				Subject: endpoint.Addr,
 				Message: fmt.Sprintf("terminal A query for %s failed: %v", target, err),
 			})
-		} else if !aRes.Msg.Authoritative {
+		} else if len(aResolved.Responses) == 0 && len(aResolved.Endpoints) > 0 {
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_rrset_failed", target, fmt.Sprintf("terminal A query via %s produced no authoritative response material", endpoint.Addr)))
+			stage.Checks = append(stage.Checks, checkreport.Check{
+				ID:      "owner.terminal_a",
+				State:   checkreport.CheckWarning,
+				Subject: endpoint.Addr,
+				Message: fmt.Sprintf("terminal A query for %s produced no authoritative response material", target),
+			})
+		} else if aResolved.Responses[0].Error != "" {
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", target, fmt.Sprintf("terminal A query failed via %s: %s", endpoint.Addr, aResolved.Responses[0].Error)))
+			stage.Checks = append(stage.Checks, checkreport.Check{
+				ID:      "owner.terminal_a",
+				State:   checkreport.CheckWarning,
+				Subject: endpoint.Addr,
+				Message: fmt.Sprintf("terminal A query for %s failed: %s", target, aResolved.Responses[0].Error),
+			})
+		} else if !aResolved.Responses[0].Authoritative {
 			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_rrset_failed", target, fmt.Sprintf("terminal A response via %s was not authoritative", endpoint.Addr)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "owner.terminal_a",
@@ -286,10 +336,12 @@ func followSameZoneCNAMETerminal(ctx context.Context, endpoint nsAddr, zone stri
 				Message: fmt.Sprintf("terminal A response for %s was not authoritative", target),
 			})
 		} else {
-			aMsg = aRes.Msg
+			aMsg = aResolved.Responses[0].Records
 		}
 
-		aaaaRes, err := exchangeDNS(ctx, endpoint.Addr, target, dns.TypeAAAA, true)
+		aaaaResolved, err := resolver.ResolveAuthoritative(ctx, target, dns.TypeAAAA, []dnsresolver.AuthoritativeServer{{Name: endpoint.Name, Endpoint: endpoint.Addr}}, dnsresolver.ResolveOptions{
+			Fanout: dnsresolver.FanoutAllAuthoritative,
+		})
 		if err != nil {
 			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", target, fmt.Sprintf("terminal AAAA query failed via %s: %v", endpoint.Addr, err)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
@@ -298,7 +350,23 @@ func followSameZoneCNAMETerminal(ctx context.Context, endpoint nsAddr, zone stri
 				Subject: endpoint.Addr,
 				Message: fmt.Sprintf("terminal AAAA query for %s failed: %v", target, err),
 			})
-		} else if !aaaaRes.Msg.Authoritative {
+		} else if len(aaaaResolved.Responses) == 0 && len(aaaaResolved.Endpoints) > 0 {
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_rrset_failed", target, fmt.Sprintf("terminal AAAA query via %s produced no authoritative response material", endpoint.Addr)))
+			stage.Checks = append(stage.Checks, checkreport.Check{
+				ID:      "owner.terminal_aaaa",
+				State:   checkreport.CheckWarning,
+				Subject: endpoint.Addr,
+				Message: fmt.Sprintf("terminal AAAA query for %s produced no authoritative response material", target),
+			})
+		} else if aaaaResolved.Responses[0].Error != "" {
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", target, fmt.Sprintf("terminal AAAA query failed via %s: %s", endpoint.Addr, aaaaResolved.Responses[0].Error)))
+			stage.Checks = append(stage.Checks, checkreport.Check{
+				ID:      "owner.terminal_aaaa",
+				State:   checkreport.CheckWarning,
+				Subject: endpoint.Addr,
+				Message: fmt.Sprintf("terminal AAAA query for %s failed: %s", target, aaaaResolved.Responses[0].Error),
+			})
+		} else if !aaaaResolved.Responses[0].Authoritative {
 			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_rrset_failed", target, fmt.Sprintf("terminal AAAA response via %s was not authoritative", endpoint.Addr)))
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "owner.terminal_aaaa",
@@ -307,7 +375,7 @@ func followSameZoneCNAMETerminal(ctx context.Context, endpoint nsAddr, zone stri
 				Message: fmt.Sprintf("terminal AAAA response for %s was not authoritative", target),
 			})
 		} else {
-			aaaaMsg = aaaaRes.Msg
+			aaaaMsg = aaaaResolved.Responses[0].Records
 		}
 
 		if aMsg == nil && aaaaMsg == nil {

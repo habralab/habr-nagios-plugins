@@ -2,13 +2,13 @@ package dnschain
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/miekg/dns"
 )
 
@@ -23,6 +23,7 @@ func init() {
 func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (checkreport.Report, error) {
 	ctx = withDNSQueryTimeout(ctx, cfg.QueryTimeout)
 	started := time.Now()
+	resolver := dnsresolver.NewResolver(cfg.QueryTimeout)
 	report := checkreport.Report{
 		Probe:         Meta.Slug,
 		Target:        target,
@@ -37,16 +38,16 @@ func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (che
 		StartedAt:    started.UTC(),
 		Meta: []checkreport.KV{
 			{Key: "output_mode", Value: string(cfg.OutputMode)},
-			{Key: "root_trust_anchors", Value: fmt.Sprintf("%d", len(rootTrustAnchors))},
+			{Key: "root_trust_anchors", Value: fmt.Sprintf("%d", dnsresolver.RootTrustAnchorCount())},
 		},
 	}
 
-	rootStage, rootProbe := probeRootTrustAnchors(ctx)
+	rootStage, rootProbe := probeRootTrustAnchors(ctx, resolver)
 	report.Traces = append(report.Traces, rootProbe.Traces...)
 	report.Stages = append(report.Stages, rootStage)
 	report.Findings = append(report.Findings, rootProbe.Findings...)
 
-	discovery, err := discoverAuthority(ctx, cfg, target)
+	discovery, err := discoverAuthority(ctx, resolver, cfg, target)
 	if err != nil {
 		return buildUnknownReport(report, started, target, "dnschain_discovery_failed", fmt.Sprintf("zone discovery failed: %v", err), cfg.IgnoreErrorSet), nil
 	}
@@ -61,18 +62,18 @@ func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (che
 	report.Traces = append(report.Traces, discovery.Traces...)
 	report.Stages = append(report.Stages, discovery.Stage)
 
-	childStage, childProbe := probeChildZone(ctx, discovery.Zone, discovery.ChildServers, discovery.DelegationNS)
+	childStage, childProbe := probeChildZone(ctx, resolver, discovery.Zone, discovery.ChildServers, discovery.DelegationNS)
 	report.Traces = append(report.Traces, childProbe.Traces...)
 	report.Stages = append(report.Stages, childStage)
 	report.Findings = append(report.Findings, childProbe.Findings...)
 
-	dnssecStage, dnssecProbe := probeDNSSECChain(ctx, discovery.Hops, rootProbe, childProbe)
+	dnssecStage, dnssecProbe := probeDNSSECChain(ctx, resolver, discovery.Hops, rootProbe, childProbe)
 	report.Traces = append(report.Traces, dnssecProbe.Traces...)
 	report.Stages = append(report.Stages, dnssecStage)
 	report.Findings = append(report.Findings, dnssecProbe.Findings...)
 
 	if strings.TrimSpace(cfg.Hostname) != "" {
-		ownerStage, ownerProbe := probeOwnerName(ctx, dns.Fqdn(strings.TrimSpace(cfg.Hostname)), discovery.Zone, discovery.ChildServers)
+		ownerStage, ownerProbe := probeOwnerName(ctx, resolver, dns.Fqdn(strings.TrimSpace(cfg.Hostname)), discovery.Zone, discovery.ChildServers)
 		report.Traces = append(report.Traces, ownerProbe.Traces...)
 		report.Stages = append(report.Stages, ownerStage)
 		report.Findings = append(report.Findings, ownerProbe.Findings...)
@@ -100,31 +101,41 @@ type discoveryResult struct {
 	DelegationNS  []string
 	ParentServers []nsAddr
 	ChildServers  []nsAddr
-	Hops          []delegationHop
+	Hops          []dnsresolver.DelegationHopInfo
 	Stage         checkreport.Stage
 	Traces        []checkreport.TraceEvent
 }
 
-func discoverAuthority(ctx context.Context, cfg Config, target string) (*discoveryResult, error) {
+func internalServers(values []dnsresolver.ServerAddr) []nsAddr {
+	out := make([]nsAddr, 0, len(values))
+	for _, value := range values {
+		out = append(out, nsAddr{Name: value.Name, Addr: value.Addr})
+	}
+	return out
+}
+
+func discoverAuthority(ctx context.Context, resolver *dnsresolver.Resolver, cfg Config, target string) (*discoveryResult, error) {
 	fqdn := dns.Fqdn(target)
 	zone := fqdn
+	var hops []dnsresolver.DelegationHopInfo
 	if strings.TrimSpace(cfg.Zone) == "" {
-		iter, err := resolveIterative(ctx, fqdn, dns.TypeNS)
+		discoveredZone, discoveredHops, err := resolver.DiscoverEnclosingZone(ctx, fqdn)
 		if err != nil {
 			return nil, err
 		}
-		if len(iter.Hops) == 0 {
-			return nil, fmt.Errorf("no delegation hops discovered for %s", fqdn)
-		}
-		zone = iter.Hops[len(iter.Hops)-1].ToZone
+		zone = discoveredZone
+		hops = discoveredHops
 	}
 
-	hops, err := buildZoneChain(ctx, zone)
-	if err != nil {
-		return nil, err
-	}
 	if len(hops) == 0 {
-		return nil, fmt.Errorf("no zone chain discovered for %s", zone)
+		var err error
+		hops, err = resolver.ZoneChain(ctx, zone)
+		if err != nil {
+			return nil, err
+		}
+		if len(hops) == 0 {
+			return nil, fmt.Errorf("no zone chain discovered for %s", zone)
+		}
 	}
 
 	last := hops[len(hops)-1]
@@ -163,9 +174,9 @@ func discoverAuthority(ctx context.Context, cfg Config, target string) (*discove
 		Zone:          last.ToZone,
 		ParentZone:    last.FromZone,
 		DelegationNS:  append([]string(nil), last.ChildNS...),
-		ParentServers: append([]nsAddr(nil), last.ParentServers...),
-		ChildServers:  append([]nsAddr(nil), last.ChildServers...),
-		Hops:          append([]delegationHop(nil), hops...),
+		ParentServers: internalServers(last.ParentServers),
+		ChildServers:  internalServers(last.ChildServers),
+		Hops:          append([]dnsresolver.DelegationHopInfo(nil), hops...),
 		Stage:         stage,
 		Traces:        traces,
 	}, nil
@@ -214,7 +225,66 @@ func groupNSAddrsByName(values []nsAddr) []nameserverEndpoints {
 	return out
 }
 
-func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegatedNS []string) (checkreport.Stage, childProbeResult) {
+func authoritativeServers(values []nsAddr) []dnsresolver.AuthoritativeServer {
+	out := make([]dnsresolver.AuthoritativeServer, 0, len(values))
+	for _, value := range uniqueNSAddrs(values) {
+		out = append(out, dnsresolver.AuthoritativeServer{Name: value.Name, Endpoint: value.Addr})
+	}
+	return out
+}
+
+func rrsetNamesFromRecords(records []dns.RR, owner string, rrtype uint16) []string {
+	var values []string
+	for _, rr := range records {
+		if rr.Header().Rrtype != rrtype || dns.Fqdn(rr.Header().Name) != dns.Fqdn(owner) {
+			continue
+		}
+		if ns, ok := rr.(*dns.NS); ok {
+			values = append(values, dns.Fqdn(ns.Ns))
+		}
+	}
+	return uniqueStrings(values)
+}
+
+func dnskeyRecords(records []dns.RR) []*dns.DNSKEY {
+	var out []*dns.DNSKEY
+	for _, rr := range records {
+		if key, ok := rr.(*dns.DNSKEY); ok {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func dsRecords(records []dns.RR) []*dns.DS {
+	var out []*dns.DS
+	for _, rr := range records {
+		if ds, ok := rr.(*dns.DS); ok {
+			out = append(out, ds)
+		}
+	}
+	return out
+}
+
+func nsec3ParamRecords(records []dns.RR) []*dns.NSEC3PARAM {
+	var out []*dns.NSEC3PARAM
+	for _, rr := range records {
+		if param, ok := rr.(*dns.NSEC3PARAM); ok {
+			out = append(out, param)
+		}
+	}
+	return out
+}
+
+func responsesByEndpoint(result dnsresolver.ResolveResult) map[string]dnsresolver.EndpointResponse {
+	out := map[string]dnsresolver.EndpointResponse{}
+	for _, response := range result.Responses {
+		out[response.Endpoint] = response
+	}
+	return out
+}
+
+func probeChildZone(ctx context.Context, resolver *dnsresolver.Resolver, zone string, servers []nsAddr, delegatedNS []string) (checkreport.Stage, childProbeResult) {
 	stage := checkreport.Stage{
 		ID:     "child.authority",
 		Title:  "Child Authority",
@@ -228,22 +298,91 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 	var nsec3ParamFingerprint string
 	var nsec3ParamBaseline []*dns.NSEC3PARAM
 	groups := groupNSAddrsByName(servers)
+	authority := authoritativeServers(servers)
+
+	soaResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeSOA, authority, dnsresolver.ResolveOptions{
+		Fanout:      dnsresolver.FanoutAllAuthoritative,
+		Consistency: dnsresolver.ConsistencyObserve,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "soa.resolve",
+			State:   checkreport.CheckUnknown,
+			Subject: zone,
+			Message: fmt.Sprintf("SOA authoritative fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("SOA authoritative fanout failed: %v", err)))
+		return stage, result
+	}
+	nsResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeNS, authority, dnsresolver.ResolveOptions{
+		Fanout:      dnsresolver.FanoutAllAuthoritative,
+		Consistency: dnsresolver.ConsistencyObserve,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "ns.resolve",
+			State:   checkreport.CheckUnknown,
+			Subject: zone,
+			Message: fmt.Sprintf("NS authoritative fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("NS authoritative fanout failed: %v", err)))
+		return stage, result
+	}
+	dnskeyResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeDNSKEY, authority, dnsresolver.ResolveOptions{
+		Fanout:      dnsresolver.FanoutAllAuthoritative,
+		Consistency: dnsresolver.ConsistencyObserve,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "dnskey.resolve",
+			State:   checkreport.CheckUnknown,
+			Subject: zone,
+			Message: fmt.Sprintf("DNSKEY authoritative fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("DNSKEY authoritative fanout failed: %v", err)))
+		return stage, result
+	}
+	nsec3Results, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeNSEC3PARAM, authority, dnsresolver.ResolveOptions{
+		Fanout:      dnsresolver.FanoutAllAuthoritative,
+		Consistency: dnsresolver.ConsistencyObserve,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "nsec3param.resolve",
+			State:   checkreport.CheckUnknown,
+			Subject: zone,
+			Message: fmt.Sprintf("NSEC3PARAM authoritative fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("NSEC3PARAM authoritative fanout failed: %v", err)))
+		return stage, result
+	}
+	soaByEndpoint := responsesByEndpoint(soaResults)
+	nsByEndpoint := responsesByEndpoint(nsResults)
+	dnskeyByEndpoint := responsesByEndpoint(dnskeyResults)
+	nsec3ByEndpoint := responsesByEndpoint(nsec3Results)
 
 	for _, group := range groups {
 		var groupReachable bool
 		for _, endpoint := range group.Endpoints {
-			soaRes, err := exchangeDNS(ctx, endpoint.Addr, zone, dns.TypeSOA, true)
-			if err != nil {
-				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s SOA query failed via %s: %v", group.Name, endpoint.Addr, err)))
+			soaRes, ok := soaByEndpoint[endpoint.Addr]
+			if !ok {
+				continue
+			}
+			if soaRes.Error != "" {
+				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s SOA query failed via %s: %s", group.Name, endpoint.Addr, soaRes.Error)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint",
 					State:   checkreport.CheckWarning,
 					Subject: endpoint.Addr,
-					Message: fmt.Sprintf("%s SOA query failed: %v", group.Name, err),
+					Message: fmt.Sprintf("%s SOA query failed: %s", group.Name, soaRes.Error),
 				})
 				continue
 			}
-			if !soaRes.Msg.Authoritative {
+			if !soaRes.Authoritative {
 				result.Findings = append(result.Findings, criticalFinding("dnschain_lame_nameserver", zone, fmt.Sprintf("%s answered without AA for SOA via %s", group.Name, endpoint.Addr)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint",
@@ -269,7 +408,7 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 				Target:  zone,
 				Message: fmt.Sprintf("SOA from %s over %s in %s", endpoint.Addr, soaRes.Network, soaRes.RTT),
 			})
-			if fp := soaAnswerFingerprint(soaRes.Msg, zone); fp != "" {
+			if fp := soaRRsetFingerprint(soaRes.Records, zone); fp != "" {
 				if soaFingerprint == "" {
 					soaFingerprint = fp
 				} else if soaFingerprint != fp {
@@ -277,16 +416,19 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 				}
 			}
 
-			nsRes, err := exchangeDNS(ctx, endpoint.Addr, zone, dns.TypeNS, true)
-			if err != nil {
-				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s NS query failed via %s: %v", group.Name, endpoint.Addr, err)))
+			nsRes, ok := nsByEndpoint[endpoint.Addr]
+			if !ok {
+				continue
+			}
+			if nsRes.Error != "" {
+				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s NS query failed via %s: %s", group.Name, endpoint.Addr, nsRes.Error)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint_ns",
 					State:   checkreport.CheckWarning,
 					Subject: endpoint.Addr,
-					Message: fmt.Sprintf("%s NS query failed: %v", group.Name, err),
+					Message: fmt.Sprintf("%s NS query failed: %s", group.Name, nsRes.Error),
 				})
-			} else if !nsRes.Msg.Authoritative {
+			} else if !nsRes.Authoritative {
 				result.Findings = append(result.Findings, criticalFinding("dnschain_lame_nameserver", zone, fmt.Sprintf("%s answered without AA for NS via %s", group.Name, endpoint.Addr)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint_ns",
@@ -295,7 +437,7 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 					Message: fmt.Sprintf("%s NS response was not authoritative", group.Name),
 				})
 			} else {
-				names := rrsetNames(nsRes.Msg, zone, dns.TypeNS)
+				names := rrsetNamesFromRecords(nsRes.Records, zone, dns.TypeNS)
 				if len(names) > 0 {
 					if nsBaseline == nil {
 						nsBaseline = names
@@ -305,18 +447,21 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 				}
 			}
 
-			dnskeyRes, err := exchangeDNS(ctx, endpoint.Addr, zone, dns.TypeDNSKEY, true)
-			if err != nil {
-				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s DNSKEY query failed via %s: %v", group.Name, endpoint.Addr, err)))
+			dnskeyRes, ok := dnskeyByEndpoint[endpoint.Addr]
+			if !ok {
+				continue
+			}
+			if dnskeyRes.Error != "" {
+				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s DNSKEY query failed via %s: %s", group.Name, endpoint.Addr, dnskeyRes.Error)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint_dnskey",
 					State:   checkreport.CheckWarning,
 					Subject: endpoint.Addr,
-					Message: fmt.Sprintf("%s DNSKEY query failed: %v", group.Name, err),
+					Message: fmt.Sprintf("%s DNSKEY query failed: %s", group.Name, dnskeyRes.Error),
 				})
 				continue
 			}
-			if !dnskeyRes.Msg.Authoritative {
+			if !dnskeyRes.Authoritative {
 				result.Findings = append(result.Findings, criticalFinding("dnschain_lame_nameserver", zone, fmt.Sprintf("%s answered without AA for DNSKEY via %s", group.Name, endpoint.Addr)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint_dnskey",
@@ -327,7 +472,8 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 				continue
 			}
 
-			keys, sigs := splitDNSKEYAnswer(dnskeyRes.Msg.Answer, zone)
+			keys := dnskeyRecords(dnskeyRes.Records)
+			sigs := dnskeyRes.Signatures
 			if result.DNSKEYFingerprints == nil {
 				result.DNSKEYFingerprints = map[string]string{}
 			}
@@ -347,18 +493,21 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 				Fingerprint: fp,
 			})
 
-			nsec3ParamRes, err := exchangeDNS(ctx, endpoint.Addr, zone, dns.TypeNSEC3PARAM, true)
-			if err != nil {
-				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s NSEC3PARAM query failed via %s: %v", group.Name, endpoint.Addr, err)))
+			nsec3ParamRes, ok := nsec3ByEndpoint[endpoint.Addr]
+			if !ok {
+				continue
+			}
+			if nsec3ParamRes.Error != "" {
+				result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", zone, fmt.Sprintf("%s NSEC3PARAM query failed via %s: %s", group.Name, endpoint.Addr, nsec3ParamRes.Error)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint_nsec3param",
 					State:   checkreport.CheckWarning,
 					Subject: endpoint.Addr,
-					Message: fmt.Sprintf("%s NSEC3PARAM query failed: %v", group.Name, err),
+					Message: fmt.Sprintf("%s NSEC3PARAM query failed: %s", group.Name, nsec3ParamRes.Error),
 				})
 				continue
 			}
-			if !nsec3ParamRes.Msg.Authoritative {
+			if !nsec3ParamRes.Authoritative {
 				result.Findings = append(result.Findings, criticalFinding("dnschain_lame_nameserver", zone, fmt.Sprintf("%s answered without AA for NSEC3PARAM via %s", group.Name, endpoint.Addr)))
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "ns.endpoint_nsec3param",
@@ -369,7 +518,7 @@ func probeChildZone(ctx context.Context, zone string, servers []nsAddr, delegate
 				continue
 			}
 
-			params := splitNSEC3PARAMAnswer(nsec3ParamRes.Msg.Answer, zone)
+			params := nsec3ParamRecords(nsec3ParamRes.Records)
 			if len(params) == 0 {
 				continue
 			}
@@ -516,7 +665,7 @@ type rootAnchorProbeResult struct {
 	ValidatedKeys []*dns.DNSKEY
 }
 
-func probeRootTrustAnchors(ctx context.Context) (checkreport.Stage, rootAnchorProbeResult) {
+func probeRootTrustAnchors(ctx context.Context, resolver *dnsresolver.Resolver) (checkreport.Stage, rootAnchorProbeResult) {
 	stage := checkreport.Stage{
 		ID:     "dnssec.root_anchor",
 		Title:  "Root Trust Anchor",
@@ -525,82 +674,32 @@ func probeRootTrustAnchors(ctx context.Context) (checkreport.Stage, rootAnchorPr
 	}
 	result := rootAnchorProbeResult{}
 
-	res, err := queryAny(ctx, rootHintsAny, ".", dns.TypeDNSKEY, true)
+	res, err := resolver.ProbeRootTrust(ctx)
 	if err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "root.dnskey_fetch",
 			State:   checkreport.CheckUnknown,
 			Subject: ".",
-			Message: fmt.Sprintf("root DNSKEY lookup failed: %v", err),
+			Message: fmt.Sprintf("root trust bootstrap failed: %v", err),
 		})
-		result.Findings = append(result.Findings, unknownFinding("dnschain_root_dnskey_fetch_failed", ".", fmt.Sprintf("root DNSKEY lookup failed: %v", err)))
-		return stage, result
-	}
-
-	keys, sigs := splitDNSKEYAnswer(res.Msg.Answer, ".")
-	if len(keys) == 0 {
-		stage.Status = checkreport.StatusCritical
-		stage.Checks = append(stage.Checks, checkreport.Check{
-			ID:      "root.dnskey_presence",
-			State:   checkreport.CheckCritical,
-			Subject: res.Server.Addr,
-			Message: "root DNSKEY RRset was not returned",
-		})
-		result.Findings = append(result.Findings, criticalFinding("dnschain_root_dnskey_missing", ".", "root DNSKEY RRset was not returned"))
-		return stage, result
-	}
-
-	matched, missing, anchoredKeys := matchRootTrustAnchorKeys(keys)
-	if matched == 0 {
-		stage.Status = checkreport.StatusCritical
-		stage.Checks = append(stage.Checks, checkreport.Check{
-			ID:      "root.anchor_match",
-			State:   checkreport.CheckCritical,
-			Subject: res.Server.Addr,
-			Message: "none of the embedded root trust anchors matched the published root DNSKEY RRset",
-		})
-		result.Findings = append(result.Findings, criticalFinding("dnschain_root_anchor_mismatch", ".", "none of the embedded root trust anchors matched the published root DNSKEY RRset"))
+		result.Findings = append(result.Findings, unknownFinding("dnschain_root_dnskey_fetch_failed", ".", fmt.Sprintf("root trust bootstrap failed: %v", err)))
 		return stage, result
 	}
 	stage.Checks = append(stage.Checks, checkreport.Check{
 		ID:      "root.anchor_match",
 		State:   checkreport.CheckPass,
 		Subject: res.Server.Addr,
-		Message: fmt.Sprintf("%d root trust anchor(s) matched the published root DNSKEY RRset", matched),
+		Message: fmt.Sprintf("%d root trust anchor(s) matched the published root DNSKEY RRset", res.Matched),
 		Meta: []checkreport.KV{
-			{Key: "missing_anchors", Value: fmt.Sprintf("%d", missing)},
+			{Key: "missing_anchors", Value: fmt.Sprintf("%d", res.Missing)},
 		},
 	})
-	if missing > 0 {
-		result.Findings = append(result.Findings, warningFinding("dnschain_root_anchor_partial_match", ".", fmt.Sprintf("%d current root trust anchor(s) were not present in the published root DNSKEY RRset", missing)))
+	if res.Missing > 0 {
+		result.Findings = append(result.Findings, warningFinding("dnschain_root_anchor_partial_match", ".", fmt.Sprintf("%d current root trust anchor(s) were not present in the published root DNSKEY RRset", res.Missing)))
 		if stage.Status == checkreport.StatusOK {
 			stage.Status = checkreport.StatusWarning
 		}
-	}
-
-	if len(sigs) == 0 {
-		stage.Status = checkreport.StatusCritical
-		stage.Checks = append(stage.Checks, checkreport.Check{
-			ID:      "root.dnskey_rrsig",
-			State:   checkreport.CheckCritical,
-			Subject: ".",
-			Message: "root DNSKEY RRset had no RRSIG records",
-		})
-		result.Findings = append(result.Findings, criticalFinding("dnschain_root_dnskey_rrsig_missing", ".", "root DNSKEY RRset had no RRSIG records"))
-		return stage, result
-	}
-
-	if err := verifyRRSIGSet(anchoredKeys, sigs, keys, time.Now().UTC()); err != nil {
-		stage.Status = checkreport.StatusCritical
-		stage.Checks = append(stage.Checks, checkreport.Check{
-			ID:      "root.dnskey_rrsig",
-			State:   checkreport.CheckCritical,
-			Subject: ".",
-			Message: fmt.Sprintf("root DNSKEY RRset signature validation failed: %v", err),
-		})
-		result.Findings = append(result.Findings, criticalFinding("dnschain_root_dnskey_rrsig_invalid", ".", fmt.Sprintf("root DNSKEY RRset signature validation failed: %v", err)))
-		return stage, result
 	}
 
 	stage.Checks = append(stage.Checks, checkreport.Check{
@@ -609,18 +708,18 @@ func probeRootTrustAnchors(ctx context.Context) (checkreport.Stage, rootAnchorPr
 		Subject: ".",
 		Message: "root DNSKEY RRset signatures validated with an embedded trust anchor",
 	})
-	result.ValidatedKeys = append(result.ValidatedKeys, keys...)
+	result.ValidatedKeys = append(result.ValidatedKeys, res.ValidatedKeys...)
 	result.Traces = append(result.Traces, checkreport.TraceEvent{
 		Kind:    "dnssec",
 		StageID: "dnssec.root_anchor",
 		State:   checkreport.CheckPass,
 		Target:  ".",
-		Message: fmt.Sprintf("root DNSKEY validated via %d embedded trust anchor(s) from %s", matched, res.Server.Addr),
+		Message: fmt.Sprintf("root DNSKEY validated via %d embedded trust anchor(s) from %s", res.Matched, res.Server.Addr),
 	})
 	return stage, result
 }
 
-func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchorProbeResult, child childProbeResult) (checkreport.Stage, dnssecProbeResult) {
+func probeDNSSECChain(ctx context.Context, resolver *dnsresolver.Resolver, hops []dnsresolver.DelegationHopInfo, root rootAnchorProbeResult, child childProbeResult) (checkreport.Stage, dnssecProbeResult) {
 	stage := checkreport.Stage{
 		ID:     "dnssec.chain",
 		Title:  "DNSSEC Chain",
@@ -656,7 +755,7 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 	trustedKeys := append([]*dns.DNSKEY(nil), root.ValidatedKeys...)
 
 	for i, hop := range hops {
-		parentDSResponses := collectParentDSEndpointResponses(ctx, hop, &stage, &result)
+		parentDSResponses := collectParentDSEndpointResponses(ctx, resolver, hop, &stage, &result)
 		if len(parentDSResponses) == 0 {
 			if stage.Status == checkreport.StatusOK {
 				stage.Status = checkreport.StatusUnknown
@@ -692,7 +791,7 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 		case i == len(hops)-1 && len(child.DNSKEYSets) > 0:
 			dnskeySets = append([]dnskeyEndpointResult(nil), child.DNSKEYSets...)
 		default:
-			dnskeySets, err = collectDNSKEYEndpointSets(ctx, hop.ToZone, hop.ChildServers)
+			dnskeySets, err = collectDNSKEYEndpointSets(ctx, resolver, hop.ToZone, internalServers(hop.ChildServers))
 			if err != nil {
 				stage.Status = checkreport.StatusCritical
 				stage.Checks = append(stage.Checks, checkreport.Check{
@@ -732,7 +831,7 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 			return stage, result
 		}
 
-		matchedKeys := matchingDNSKEYs(dsRecords, keys)
+		matchedKeys := dnsresolver.MatchDNSKEYs(dsRecords, keys)
 		if len(matchedKeys) == 0 {
 			stage.Status = checkreport.StatusCritical
 			stage.Checks = append(stage.Checks, checkreport.Check{
@@ -746,7 +845,7 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 		}
 		partialSEPCoverage := map[string]int{}
 		for _, set := range dnskeySets {
-			endpointMatchedKeys := matchingDNSKEYs(dsRecords, set.Keys)
+			endpointMatchedKeys := dnsresolver.MatchDNSKEYs(dsRecords, set.Keys)
 			if len(endpointMatchedKeys) == 0 {
 				stage.Status = checkreport.StatusCritical
 				stage.Checks = append(stage.Checks, checkreport.Check{
@@ -797,7 +896,7 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 				})
 				partialSEPCoverage[fmt.Sprintf("%d/%d", algCoverage.SignedAlgorithms, algCoverage.TotalAlgorithms)]++
 			}
-			if err := verifyRRSetWithDNSKEYs(endpointMatchedKeys, set.Sigs, dnskeysToRRs(set.Keys), time.Now().UTC()); err != nil {
+			if err := dnsresolver.VerifySignedRRSet(endpointMatchedKeys, set.Sigs, dnsresolver.DNSKEYRRs(set.Keys), time.Now().UTC()); err != nil {
 				stage.Status = checkreport.StatusCritical
 				stage.Checks = append(stage.Checks, checkreport.Check{
 					ID:      "child.dnskey_endpoint",
@@ -812,7 +911,7 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 		for ratio, endpoints := range partialSEPCoverage {
 			result.Findings = append(result.Findings, warningFinding("dnschain_ds_partial_sep_coverage", hop.ToZone, fmt.Sprintf("%d authoritative endpoint(s) established secure entry points for only %s parent DS algorithm(s)", endpoints, ratio)))
 		}
-		if err := verifyRRSetWithDNSKEYs(matchedKeys, sigs, dnskeysToRRs(keys), time.Now().UTC()); err != nil {
+		if err := dnsresolver.VerifySignedRRSet(matchedKeys, sigs, dnsresolver.DNSKEYRRs(keys), time.Now().UTC()); err != nil {
 			stage.Status = checkreport.StatusCritical
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "child.dnskey_rrsig",
@@ -972,43 +1071,56 @@ func probeDNSSECChain(ctx context.Context, hops []delegationHop, root rootAnchor
 		})
 		trustedKeys = append([]*dns.DNSKEY(nil), keys...)
 		if i == len(hops)-1 && len(child.NSEC3PARAMSets) > 0 {
-			probeFinalZoneNSEC3Responses(ctx, hop.ToZone, hop.ChildServers, trustedKeys, &stage, &result)
+			probeFinalZoneNSEC3Responses(ctx, resolver, hop.ToZone, internalServers(hop.ChildServers), trustedKeys, &stage, &result)
 		}
 	}
 
 	return stage, result
 }
 
-func collectParentDSEndpointResponses(ctx context.Context, hop delegationHop, stage *checkreport.Stage, result *dnssecProbeResult) []parentDSEndpointResult {
+func collectParentDSEndpointResponses(ctx context.Context, resolver *dnsresolver.Resolver, hop dnsresolver.DelegationHopInfo, stage *checkreport.Stage, result *dnssecProbeResult) []parentDSEndpointResult {
 	var responses []parentDSEndpointResult
-	for _, server := range uniqueNSAddrs(hop.ParentServers) {
-		res, err := exchangeDNS(ctx, server.Addr, hop.ToZone, dns.TypeDS, true)
-		if err != nil {
+	resolved, err := resolver.ResolveAuthoritative(ctx, hop.ToZone, dns.TypeDS, authoritativeServers(internalServers(hop.ParentServers)), dnsresolver.ResolveOptions{
+		Fanout:      dnsresolver.FanoutAllAuthoritative,
+		Consistency: dnsresolver.ConsistencyObserve,
+	})
+	if err != nil {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "parent.ds_lookup",
+			State:   checkreport.CheckUnknown,
+			Subject: hop.ToZone,
+			Message: fmt.Sprintf("authoritative DS fanout failed: %v", err),
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_parent_ds_lookup_failed", hop.ToZone, fmt.Sprintf("authoritative DS fanout failed for %s: %v", hop.ToZone, err)))
+		return nil
+	}
+	for _, response := range resolved.Responses {
+		if response.Error != "" {
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "parent.ds_endpoint",
 				State:   checkreport.CheckWarning,
-				Subject: server.Addr,
-				Message: fmt.Sprintf("DS lookup for %s failed: %v", hop.ToZone, err),
+				Subject: response.Endpoint,
+				Message: fmt.Sprintf("DS lookup for %s failed: %s", hop.ToZone, response.Error),
 			})
-			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", hop.ToZone, fmt.Sprintf("parent endpoint %s did not answer the DS lookup for %s: %v", server.Addr, hop.ToZone, err)))
+			result.Findings = append(result.Findings, warningFinding("dnschain_nameserver_endpoint_unreachable", hop.ToZone, fmt.Sprintf("parent endpoint %s did not answer the DS lookup for %s: %s", response.Endpoint, hop.ToZone, response.Error)))
 			continue
 		}
-		if !res.Msg.Authoritative {
+		if !response.Authoritative {
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "parent.ds_endpoint",
 				State:   checkreport.CheckWarning,
-				Subject: server.Addr,
+				Subject: response.Endpoint,
 				Message: fmt.Sprintf("DS response for %s was not authoritative", hop.ToZone),
 			})
-			result.Findings = append(result.Findings, warningFinding("dnschain_parent_ds_endpoint_failed", hop.ToZone, fmt.Sprintf("parent endpoint %s returned a non-authoritative DS response for %s", server.Addr, hop.ToZone)))
+			result.Findings = append(result.Findings, warningFinding("dnschain_parent_ds_endpoint_failed", hop.ToZone, fmt.Sprintf("parent endpoint %s returned a non-authoritative DS response for %s", response.Endpoint, hop.ToZone)))
 			continue
 		}
-		records, sigs := splitDSAnswer(res.Msg.Answer, hop.ToZone)
 		responses = append(responses, parentDSEndpointResult{
-			Endpoint: server,
-			Msg:      res.Msg,
-			Records:  records,
-			Sigs:     sigs,
+			Endpoint: nsAddr{Name: response.ServerName, Addr: response.Endpoint},
+			Msg:      &dns.Msg{Ns: append([]dns.RR(nil), response.Authority...)},
+			Records:  dsRecords(response.Records),
+			Sigs:     response.Signatures,
 		})
 	}
 	if len(responses) == 0 {
@@ -1024,7 +1136,7 @@ func collectParentDSEndpointResponses(ctx context.Context, hop delegationHop, st
 	return responses
 }
 
-func validateParentDSEndpoints(hop delegationHop, responses []parentDSEndpointResult, trustedKeys []*dns.DNSKEY, stage *checkreport.Stage, result *dnssecProbeResult) ([]*dns.DS, []*dns.RRSIG, bool, bool) {
+func validateParentDSEndpoints(hop dnsresolver.DelegationHopInfo, responses []parentDSEndpointResult, trustedKeys []*dns.DNSKEY, stage *checkreport.Stage, result *dnssecProbeResult) ([]*dns.DS, []*dns.RRSIG, bool, bool) {
 	now := time.Now().UTC()
 	hasDSRecords := false
 	hasNoDSRecords := false
@@ -1074,7 +1186,7 @@ func validateParentDSEndpoints(hop delegationHop, responses []parentDSEndpointRe
 			result.Findings = append(result.Findings, criticalFinding("dnschain_ds_rrsig_missing", hop.ToZone, fmt.Sprintf("parent endpoint %s published DS records without RRSIG coverage", response.Endpoint.Addr)))
 			return nil, nil, false, true
 		}
-		if err := verifyRRSetWithDNSKEYs(trustedKeys, response.Sigs, dsToRRs(response.Records), now); err != nil {
+		if err := dnsresolver.VerifySignedRRSet(trustedKeys, response.Sigs, dnsresolver.DSRRs(response.Records), now); err != nil {
 			stage.Status = checkreport.StatusCritical
 			stage.Checks = append(stage.Checks, checkreport.Check{
 				ID:      "parent.ds_endpoint",
@@ -1141,12 +1253,12 @@ func assessSecureEntryPoints(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dn
 	out := make(map[string]dsSEPAssessment, len(dsRecords))
 	for _, ds := range dsRecords {
 		key := fmt.Sprintf("%d|%d|%d|%s", ds.KeyTag, ds.Algorithm, ds.DigestType, strings.ToUpper(ds.Digest))
-		matchedKeys := matchingDNSKEYs([]*dns.DS{ds}, keys)
+		matchedKeys := dnsresolver.MatchDNSKEYs([]*dns.DS{ds}, keys)
 		if len(matchedKeys) == 0 {
 			out[key] = dsSEPAssessment{Matched: false, Signed: false}
 			continue
 		}
-		err := verifyRRSetWithDNSKEYs(matchedKeys, sigs, dnskeysToRRs(keys), now)
+		err := dnsresolver.VerifySignedRRSet(matchedKeys, sigs, dnsresolver.DNSKEYRRs(keys), now)
 		out[key] = dsSEPAssessment{Matched: true, Signed: err == nil}
 	}
 	return out
@@ -1188,72 +1300,19 @@ func summarizeDSCoverage(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dns.RR
 	return summary
 }
 
-func matchDNSKEY(ds *dns.DS, keys []*dns.DNSKEY) bool {
-	for _, key := range keys {
-		if key.Header().Name != ds.Header().Name {
-			continue
-		}
-		if generated := key.ToDS(ds.DigestType); generated != nil && strings.EqualFold(generated.Digest, ds.Digest) && generated.Algorithm == ds.Algorithm && generated.KeyTag == ds.KeyTag {
-			return true
-		}
-	}
-	return false
-}
-
-func matchingDNSKEYs(dsRecords []*dns.DS, keys []*dns.DNSKEY) []*dns.DNSKEY {
-	var matched []*dns.DNSKEY
-	for _, key := range keys {
-		for _, ds := range dsRecords {
-			if key.Header().Name != ds.Header().Name {
-				continue
-			}
-			if generated := key.ToDS(ds.DigestType); generated != nil && strings.EqualFold(generated.Digest, ds.Digest) && generated.Algorithm == ds.Algorithm && generated.KeyTag == ds.KeyTag {
-				matched = append(matched, key)
-				break
-			}
-		}
-	}
-	return matched
-}
-
-func splitDNSKEYAnswer(rrs []dns.RR, owner string) ([]*dns.DNSKEY, []*dns.RRSIG) {
-	var keys []*dns.DNSKEY
-	var sigs []*dns.RRSIG
-	for _, rr := range rrs {
-		switch v := rr.(type) {
-		case *dns.DNSKEY:
-			if dns.Fqdn(v.Header().Name) == dns.Fqdn(owner) {
-				keys = append(keys, v)
-			}
-		case *dns.RRSIG:
-			if dns.Fqdn(v.Header().Name) == dns.Fqdn(owner) && v.TypeCovered == dns.TypeDNSKEY {
-				sigs = append(sigs, v)
-			}
-		}
-	}
-	return keys, sigs
-}
-
-func splitDSAnswer(rrs []dns.RR, owner string) ([]*dns.DS, []*dns.RRSIG) {
-	var dsRecords []*dns.DS
-	var sigs []*dns.RRSIG
-	for _, rr := range rrs {
-		switch v := rr.(type) {
-		case *dns.DS:
-			if dns.Fqdn(v.Header().Name) == dns.Fqdn(owner) {
-				dsRecords = append(dsRecords, v)
-			}
-		case *dns.RRSIG:
-			if dns.Fqdn(v.Header().Name) == dns.Fqdn(owner) && v.TypeCovered == dns.TypeDS {
-				sigs = append(sigs, v)
-			}
-		}
-	}
-	return dsRecords, sigs
-}
-
 func soaAnswerFingerprint(msg *dns.Msg, owner string) string {
 	for _, rr := range msg.Answer {
+		soa, ok := rr.(*dns.SOA)
+		if !ok || dns.Fqdn(soa.Header().Name) != dns.Fqdn(owner) {
+			continue
+		}
+		return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%d", dns.Fqdn(soa.Ns), dns.Fqdn(soa.Mbox), soa.Serial, soa.Refresh, soa.Retry, soa.Expire, soa.Minttl)
+	}
+	return ""
+}
+
+func soaRRsetFingerprint(rrs []dns.RR, owner string) string {
+	for _, rr := range rrs {
 		soa, ok := rr.(*dns.SOA)
 		if !ok || dns.Fqdn(soa.Header().Name) != dns.Fqdn(owner) {
 			continue
@@ -1311,7 +1370,7 @@ func consistencyMessage(subject string, state checkreport.CheckState) string {
 	return subject + " differed across responding authoritative servers"
 }
 
-func assessParentDSConsistencyResponses(hop delegationHop, responses []parentDSEndpointResult) (checkreport.CheckState, string, *checkreport.Finding) {
+func assessParentDSConsistencyResponses(hop dnsresolver.DelegationHopInfo, responses []parentDSEndpointResult) (checkreport.CheckState, string, *checkreport.Finding) {
 	if len(responses) <= 1 {
 		return checkreport.CheckPass, "", nil
 	}
@@ -1326,91 +1385,30 @@ func assessParentDSConsistencyResponses(hop delegationHop, responses []parentDSE
 	return checkreport.CheckWarning, "parent DS responses differed across responding authoritative servers", &finding
 }
 
-func matchRootTrustAnchorKeys(keys []*dns.DNSKEY) (matched int, missing int, anchored []*dns.DNSKEY) {
-	for _, anchor := range rootTrustAnchors {
-		found := false
-		for _, key := range keys {
-			if key.KeyTag() != anchor.KeyTag || key.Algorithm != anchor.Algorithm || key.Flags != anchor.Flags || key.PublicKey != anchor.PublicKey {
-				continue
-			}
-			if generated := key.ToDS(anchor.DigestType); generated == nil || !strings.EqualFold(generated.Digest, anchor.Digest) {
-				continue
-			}
-			found = true
-			anchored = append(anchored, key)
-			break
-		}
-		if found {
-			matched++
-		} else {
-			missing++
-		}
+func collectDNSKEYEndpointSets(ctx context.Context, resolver *dnsresolver.Resolver, zone string, servers []nsAddr) ([]dnskeyEndpointResult, error) {
+	resolved, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeDNSKEY, authoritativeServers(servers), dnsresolver.ResolveOptions{
+		Fanout:      dnsresolver.FanoutAllAuthoritative,
+		Consistency: dnsresolver.ConsistencyObserve,
+	})
+	if err != nil {
+		return nil, err
 	}
-	return matched, missing, anchored
-}
-
-func verifyRRSIGSet(keys []*dns.DNSKEY, sigs []*dns.RRSIG, rrset []*dns.DNSKEY, now time.Time) error {
-	return verifyRRSetWithDNSKEYs(keys, sigs, dnskeysToRRs(rrset), now)
-}
-
-func verifyRRSetWithDNSKEYs(keys []*dns.DNSKEY, sigs []*dns.RRSIG, rrset []dns.RR, now time.Time) error {
-	var errs []string
-	for _, sig := range sigs {
-		if !sig.ValidityPeriod(now) {
-			errs = append(errs, fmt.Sprintf("RRSIG keytag=%d is outside validity window", sig.KeyTag))
-			continue
-		}
-		for _, key := range keys {
-			if sig.KeyTag != key.KeyTag() {
-				continue
-			}
-			if err := sig.Verify(key, rrset); err == nil {
-				return nil
-			} else {
-				errs = append(errs, fmt.Sprintf("keytag=%d verify error: %v", sig.KeyTag, err))
-			}
-		}
-	}
-	if len(errs) == 0 {
-		return fmt.Errorf("no matching DNSKEY/RRSIG pair found")
-	}
-	return errors.New(strings.Join(errs, "; "))
-}
-
-func dnskeysToRRs(keys []*dns.DNSKEY) []dns.RR {
-	rrs := make([]dns.RR, 0, len(keys))
-	for _, rr := range keys {
-		rrs = append(rrs, rr)
-	}
-	return rrs
-}
-
-func dsToRRs(records []*dns.DS) []dns.RR {
-	rrs := make([]dns.RR, 0, len(records))
-	for _, rr := range records {
-		rrs = append(rrs, rr)
-	}
-	return rrs
-}
-
-func collectDNSKEYEndpointSets(ctx context.Context, zone string, servers []nsAddr) ([]dnskeyEndpointResult, error) {
 	var sets []dnskeyEndpointResult
 	var errs []string
-	for _, server := range uniqueNSAddrs(servers) {
-		res, err := exchangeDNS(ctx, server.Addr, zone, dns.TypeDNSKEY, true)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", server.Addr, err))
+	for _, response := range resolved.Responses {
+		if response.Error != "" {
+			errs = append(errs, fmt.Sprintf("%s: %s", response.Endpoint, response.Error))
 			continue
 		}
-		if !res.Msg.Authoritative {
-			errs = append(errs, fmt.Sprintf("%s: response was not authoritative", server.Addr))
+		if !response.Authoritative {
+			errs = append(errs, fmt.Sprintf("%s: response was not authoritative", response.Endpoint))
 			continue
 		}
-		keys, sigs := splitDNSKEYAnswer(res.Msg.Answer, zone)
+		keys := dnskeyRecords(response.Records)
 		sets = append(sets, dnskeyEndpointResult{
-			Endpoint:    server,
+			Endpoint:    nsAddr{Name: response.ServerName, Addr: response.Endpoint},
 			Keys:        keys,
-			Sigs:        sigs,
+			Sigs:        response.Signatures,
 			Fingerprint: dnskeySetFingerprint(keys),
 		})
 	}

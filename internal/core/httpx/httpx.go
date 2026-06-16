@@ -18,6 +18,8 @@ const (
 type Options struct {
 	InsecureSkipVerify bool
 	UserAgent          string
+	DNSResolver        DNSResolver
+	DNSLookupTimeout   time.Duration
 }
 
 func DefaultUserAgent() string {
@@ -33,6 +35,7 @@ func NewClient(timeout time.Duration, opts Options) *http.Client {
 		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
 	}
 	transport.TLSClientConfig.InsecureSkipVerify = opts.InsecureSkipVerify
+	transport.DialContext = newResolverDialContext(timeout, opts)
 
 	return &http.Client{
 		Timeout:   timeout,

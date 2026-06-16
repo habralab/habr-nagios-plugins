@@ -72,11 +72,35 @@ When a probe supports ignored findings:
 - slug parsing and validation should reuse shared helpers where possible
 - suppressible findings should be discoverable through a structured catalog entry shape: slug, category, default severity, and default message
 
+Documentation style:
+
+- describe module and probe state as a snapshot of the repository at hand
+- prefer "scope includes", "output contains", "module provides", and similar present-tense phrasing
+- avoid historical or conversational narration such as "now", "already", "still", "used to", or "no longer" unless a migration step is itself the subject of the note
+- keep future work explicit as follow-up items or constraints rather than mixing it into the state description
+
 Current probes:
 
 - `sitemap`: discovery and validation of sitemap entrypoints, trees, and extension payloads
 - `robots`: `robots.txt` availability, syntax, policy, extension-registry, and documented crawler-behavior checks with RFC-oriented, vendor-aware, and strict behavior modes
-- `dnschain`: authoritative delegation and DNSSEC chain checker, built around a structured report model and already covering secure delegation hops, parent-side missing-`DS` denial, `NSEC3PARAM` policy/consistency, and sampled final-zone `NSEC3` negative responses while still leaving room for fuller generic authenticated-denial coverage
+- `dnschain`: authoritative delegation and DNSSEC chain checker with a structured report model; scope includes secure delegation hops, parent-side missing-`DS` denial, `NSEC3PARAM` policy and consistency, and sampled final-zone `NSEC3` negative responses
+- `dnsresolver`: embedded iterative DNS resolver with authoritative querying, per-session cache, DNSSEC validation where available, and shared HTTP transport hostname resolution through `httpx`
+- `dnschain` uses `dnsresolver` for root trust bootstrap, enclosing-zone discovery, zone-chain construction, authoritative fanout, and owner-level authoritative resolution
+- `dnschain`-local DNS-specific code stays narrow and presentation-aware:
+  - denial-proof classification and evidence shaping for `dnschain` findings
+  - sampled final-zone `NSEC3` runtime probes and their stage/check wording
+  - checker-specific DNSSEC algorithm policy interpretation and alerting
+- future resolver policy may expose an explicit short-circuit flag such as `--resolver-mode bundled|system`; `bundled` is the authoritative and validating path, while `system` delegates hostname resolution to the host OS resolver and only interprets DNSSEC state if the external resolver already returned it
+- `dnsresolver` should aim for a DNS-like API shape rather than a probe-specific one: question in, message-like answer out, with answer/authority/additional sections and response flags close to what operators expect from `dig` or a normal resolver API; higher-level helpers may still exist for probes that want convenience lookups
+- DNSSEC state produced or observed by `dnsresolver` is primarily an input to probe logic, not something that must automatically appear in end-user output; some probes may care deeply about authenticated data, while others may use the same resolver only for ordinary hostname resolution
+- `dnsresolver` has three distinct layers:
+  - `Lookup(...)`: the small DNS-like API for a single question and a single effective result
+  - `Resolve(...)`: a richer execution API that accepts fanout and consistency policy and can return per-endpoint material plus an aggregated result
+  - `ResolveAuthoritative(...)`: the execution API for callers that already know the authoritative server set and want the resolver to perform the fanout and consistency work instead of reimplementing it in the probe
+- new resolver features should prefer explicit execution policy objects such as fanout mode and consistency mode over ad-hoc booleans; the resolver is the execution engine, while probes remain the business interpreters of the returned picture
+- when a probe needs a yes/no answer such as "did any authoritative server publish this RRset" or "are all authoritative answers identical", that decision should be expressible through resolver execution options or through neutral assessments returned by the resolver, rather than through duplicated per-probe loops
+- `dnsresolver` caches are intentionally per-resolver and therefore per probe run; they must not survive across runs
+- cache keys must stay specific enough to avoid poisoning neighboring checks: simple lookups key on question, while richer execution results must also key on the authoritative server set and the execution policy such as fanout and consistency mode
 
 For `robots`, keep target and policy semantics explicit:
 
@@ -91,7 +115,7 @@ For DNS-oriented probes, keep target semantics explicit:
 
 - `--zone` means "analyze this zone cut directly"
 - `-H/--hostname` means "start from this owner name, derive its enclosing zone, validate the zone chain, and then validate owner-level RR presence appropriate for the probe"
-- in `dnschain`, hostname mode currently checks owner-level `CNAME` / `A` / `AAAA` presence and consistency on the final zone authoritative servers, follows same-zone `CNAME` chains to terminal address data, and still does not recurse through foreign-zone `CNAME` targets
+- in `dnschain`, hostname mode checks owner-level `CNAME` / `A` / `AAAA` presence and consistency on the final zone authoritative servers, follows same-zone `CNAME` chains to terminal address data, and does not recurse through foreign-zone `CNAME` targets
 
 For DNSSEC denial handling in `dnschain`, keep the internal model explicit:
 
@@ -205,12 +229,12 @@ Likely core areas:
 - finding catalog and suppression policy
 - HTTP client and tracing helpers
 - DNS helpers
-- TLS helpers
+- transport-related helpers
 - output rendering
 
 Probe-specific logic should stay out of shared modules until there is a real second consumer.
 
-The current HTTP/TLS transport options are intended to converge in shared modules rather than being redefined per probe.
+The current transport options are intended to converge in shared modules rather than being redefined per probe.
 
 Current direction:
 
@@ -219,11 +243,14 @@ Current direction:
 - shared finding catalog entries, severity naming, and suppression metadata live in `internal/core/finding`
 - shared client construction lives in `internal/core/httpx`
 - shared redirect policy helpers live next to that module in `internal/core/httpx/redirects.go`
-- shared HTTP/TLS-related help text should live near that module
+- shared transport-related help text should live near that module
+- shared HTTP transport should resolve hostnames through `dnsresolver` rather than assuming the host OS recursive resolver is acceptable; per-probe overrides can still inject a custom `HTTPClient` when tests or diagnostics need it
+- if a future CLI flag allows system-resolver short-circuiting, that override should be implemented in the shared resolver/transport layer rather than as probe-local conditionals; probes may choose to surface the implications, but the resolver itself should not force that into user-facing output
 - shared probe identity and naming helpers live in `internal/core/probemeta`
 - shared verbosity parsing and clamping live in `internal/core/verbosity`
 - shared target URL normalization and base-site derivation live in `internal/core/targeturl`
 - shared probe CLI helpers for program naming, timeout parsing, CSV parsing, and ignored-slug validation live in `internal/core/probecli`
+- shared authoritative DNS and DNSSEC lookup helpers live in `internal/core/dnsresolver`
 - shared report structures for staged checks and multi-renderer output live in `internal/core/checkreport`
 - shared renderer-facing check presentation helpers also live in `internal/core/checkreport` when they operate only on the shared report model, for example verbosity-aware hiding of low-level checks and aggregation of repeated success checks
 - probe apps should aggregate shared and probe-local flags into one help output
@@ -428,7 +455,7 @@ Current sitemap probe conventions:
 
 Current robots probe conventions:
 
-- default overall timeout is `30s`
+- default overall timeout is `60s`
 - `HTTP 404` means "robots.txt not present" and should not be treated as a transport failure by default
 - `4xx` availability failures should remain distinct from `5xx` or fetch failures so operators can suppress policy noise without hiding server-side breakage
 - `--behavior-profile` should keep `rfc` as the default baseline, with `vendor-aware` and `strict` as opt-in overlays
@@ -437,7 +464,7 @@ Current robots probe conventions:
 
 Concrete probe flags should be documented alongside each binary once they exist.
 
-If a probe uses shared HTTP/TLS options, the shared flag descriptions should stay attached to the shared module and be rendered into the final help text rather than duplicated manually across probe apps.
+If a probe uses shared transport options, the shared flag descriptions should stay attached to the shared module and be rendered into the final help text rather than duplicated manually across probe apps.
 
 ## Build and Release Expectations
 

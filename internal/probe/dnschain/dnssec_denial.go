@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/miekg/dns"
 )
 
@@ -143,13 +144,13 @@ func verifyDenialMaterial(authority []dns.RR, trustedKeys []*dns.DNSKEY, now tim
 	material := splitDenialAuthority(authority)
 
 	for _, set := range material.NSEC {
-		if err := verifyRRSetWithDNSKEYs(trustedKeys, set.Sigs, set.RRs, now); err != nil {
+		if err := dnsresolver.VerifySignedRRSet(trustedKeys, set.Sigs, set.RRs, now); err != nil {
 			return denialProofMaterial{}, fmt.Errorf("NSEC proof signature validation failed for %s: %w", set.Owner, err)
 		}
 	}
 
 	for _, set := range material.NSEC3 {
-		if err := verifyRRSetWithDNSKEYs(trustedKeys, set.Sigs, set.RRs, now); err != nil {
+		if err := dnsresolver.VerifySignedRRSet(trustedKeys, set.Sigs, set.RRs, now); err != nil {
 			return denialProofMaterial{}, fmt.Errorf("NSEC3 proof signature validation failed for %s: %w", set.Owner, err)
 		}
 	}

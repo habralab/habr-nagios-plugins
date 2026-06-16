@@ -1,4 +1,4 @@
-package dnschain
+package dnsresolver
 
 import (
 	"context"

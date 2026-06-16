@@ -1,4 +1,4 @@
-package dnschain
+package dnsresolver
 
 import (
 	"embed"
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-//go:embed embeddata/root-anchors.xml embeddata/root-anchors.p7s embeddata/icannbundle.pem
+//go:embed embeddata/root-anchors.xml
 var trustAnchorsFS embed.FS
 
 type trustAnchorDigest struct {

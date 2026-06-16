@@ -24,7 +24,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Timeout:        30 * time.Second,
+		Timeout:        60 * time.Second,
 		QueryTimeout:   3 * time.Second,
 		OutputMode:     checkreport.OutputNagios,
 		IgnoreErrorSet: map[string]bool{},
