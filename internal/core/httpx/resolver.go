@@ -18,6 +18,16 @@ const (
 	defaultDialTimeout      = 5 * time.Second
 )
 
+var newBundledResolver = func(timeout time.Duration, cacheBackend string) DNSResolver {
+	resolver := dnsresolver.NewResolver(timeout)
+	resolver.ConfigureSharedCacheBackendDSN(cacheBackend)
+	return resolver
+}
+
+var newDialContext = func(timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+	return (&net.Dialer{Timeout: timeout}).DialContext
+}
+
 type DNSResolver interface {
 	Lookup(context.Context, string, uint16) (dnsresolver.LookupResult, error)
 }
@@ -25,10 +35,12 @@ type DNSResolver interface {
 func newResolverDialContext(clientTimeout time.Duration, opts Options) func(context.Context, string, string) (net.Conn, error) {
 	resolver := opts.DNSResolver
 	if resolver == nil {
-		resolver = dnsresolver.NewResolver(effectiveDNSLookupTimeout(opts))
+		resolver = newBundledResolver(effectiveDNSLookupTimeout(opts), opts.CacheBackend)
 	}
-	dialer := &net.Dialer{Timeout: effectiveDialTimeout(clientTimeout)}
-	return resolverDialContext(resolver, effectiveDNSLookupTimeout(opts), dialer.DialContext)
+	if opts.ResolverObserver != nil {
+		opts.ResolverObserver(resolver)
+	}
+	return resolverDialContext(resolver, effectiveDNSLookupTimeout(opts), newDialContext(effectiveDialTimeout(clientTimeout)))
 }
 
 func resolverDialContext(resolver DNSResolver, lookupTimeout time.Duration, dialFn func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {

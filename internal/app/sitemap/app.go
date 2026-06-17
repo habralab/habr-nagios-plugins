@@ -1,6 +1,7 @@
 package sitemapapp
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -32,6 +33,9 @@ func Run(programName string, args []string) int {
 		UnknownExitCode: sitemap.ExitUnknown,
 		OutputMode:      func(cfg sitemap.Config) checkreport.OutputMode { return cfg.OutputMode },
 		Verbosity:       func(cfg sitemap.Config) int { return cfg.Verbosity },
+		DecorateReport: func(ctx context.Context, cfg sitemap.Config, report *checkreport.Report) {
+			probecli.DecorateReportWithCacheBackendInspection(ctx, cfg.CacheBackend, cfg.HTTPClient == nil, report)
+		},
 	})
 }
 
@@ -66,6 +70,7 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	cfg.HTTP.UserAgent = inputs.String("user_agent")
 	cfg.HTTP.InsecureSkipVerify = inputs.Bool("insecure_skip_verify")
 	cfg.Timeout = resolved.Timeout
+	cfg.CacheBackend = resolved.CacheBackend
 	cfg.Verbosity = resolved.Verbosity
 	cfg.OutputMode = resolved.OutputMode
 	cfg.IgnoreErrors = resolved.IgnoreErrors

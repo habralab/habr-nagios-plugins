@@ -21,6 +21,7 @@ type DelegationHopInfo struct {
 	ParentServers []ServerAddr
 	ChildNS       []string
 	ChildServers  []ServerAddr
+	CacheTTL      time.Duration
 }
 
 type RootTrustResult struct {
@@ -37,23 +38,62 @@ func RootTrustAnchorCount() int {
 func (r *Resolver) DiscoverEnclosingZone(ctx context.Context, qname string) (string, []DelegationHopInfo, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
 	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
+	if cached, ok := r.cachedAuthority(qname); ok {
+		if len(cached.Hops) == 0 {
+			return cached.Zone, nil, nil
+		}
+		return cached.Zone, exportedDelegationHops(cached.Hops), nil
+	}
+	if cached, ok := r.loadSharedAuthority(ctx, qname); ok {
+		if len(cached.Hops) == 0 {
+			return cached.Zone, nil, nil
+		}
+		return cached.Zone, exportedDelegationHops(cached.Hops), nil
+	}
 	iter, err := r.iterativeFn(withDNSQueryTimeout(ctx, r.QueryTimeout), dns.Fqdn(qname), dns.TypeNS)
 	if err != nil {
 		return "", nil, err
 	}
+	r.recordLiveResolution()
+	r.appendCacheTrace("live_resolution", "authority", dns.Fqdn(qname), "discover enclosing zone")
 	if len(iter.Hops) == 0 {
 		return "", nil, fmt.Errorf("no delegation hops discovered for %s", dns.Fqdn(qname))
 	}
-	return iter.Hops[len(iter.Hops)-1].ToZone, exportedDelegationHops(iter.Hops), nil
+	zone := iter.Hops[len(iter.Hops)-1].ToZone
+	r.storeAuthority(qname, authorityResult{
+		Zone:     zone,
+		Servers:  cloneNSAddrs(iter.Hops[len(iter.Hops)-1].ChildServers),
+		Hops:     cloneDelegationHops(iter.Hops),
+		CacheTTL: authorityResultTTL(iter.Hops),
+	})
+	r.storeZoneChain(zone, iter.Hops)
+	r.storeSharedAuthority(ctx, qname, authorityResult{
+		Zone:     zone,
+		Servers:  cloneNSAddrs(iter.Hops[len(iter.Hops)-1].ChildServers),
+		Hops:     cloneDelegationHops(iter.Hops),
+		CacheTTL: authorityResultTTL(iter.Hops),
+	})
+	r.storeSharedZoneChain(ctx, zone, iter.Hops)
+	return zone, exportedDelegationHops(iter.Hops), nil
 }
 
 func (r *Resolver) ZoneChain(ctx context.Context, zone string) ([]DelegationHopInfo, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
 	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
+	if cached, ok := r.cachedZoneChain(zone); ok {
+		return exportedDelegationHops(cached), nil
+	}
+	if cached, ok := r.loadSharedZoneChain(ctx, zone); ok {
+		return exportedDelegationHops(cached), nil
+	}
 	hops, err := buildZoneChain(withDNSQueryTimeout(ctx, r.QueryTimeout), zone)
 	if err != nil {
 		return nil, err
 	}
+	r.recordLiveResolution()
+	r.appendCacheTrace("live_resolution", "delegation", dns.Fqdn(zone), "")
+	r.storeZoneChain(zone, hops)
+	r.storeSharedZoneChain(ctx, zone, hops)
 	return exportedDelegationHops(hops), nil
 }
 
@@ -94,6 +134,7 @@ func exportedDelegationHops(values []delegationHop) []DelegationHopInfo {
 			ParentServers: exportedServers(value.ParentServers),
 			ChildNS:       append([]string(nil), value.ChildNS...),
 			ChildServers:  exportedServers(value.ChildServers),
+			CacheTTL:      value.CacheTTL,
 		})
 	}
 	return out
@@ -125,12 +166,14 @@ func UniqueAuthoritativeServers(values []AuthoritativeServer) []AuthoritativeSer
 
 func (r *Resolver) ResolveHostEndpoints(ctx context.Context, host string) ([]AuthoritativeServer, error) {
 	var out []AuthoritativeServer
-	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
-		lookup, err := r.Lookup(ctx, host, qtype)
-		if err != nil {
+	for _, item := range r.LookupBatch(ctx, []Question{
+		{QName: host, QType: dns.TypeA},
+		{QName: host, QType: dns.TypeAAAA},
+	}) {
+		if item.Err != nil {
 			continue
 		}
-		for _, rr := range lookup.Records {
+		for _, rr := range item.Result.Records {
 			switch v := rr.(type) {
 			case *dns.A:
 				out = append(out, AuthoritativeServer{Name: dns.Fqdn(host), Endpoint: net.JoinHostPort(v.A.String(), "53")})

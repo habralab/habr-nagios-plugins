@@ -19,6 +19,8 @@ type Options struct {
 	UserAgent          string
 	DNSResolver        DNSResolver
 	DNSLookupTimeout   time.Duration
+	CacheBackend       string
+	ResolverObserver   func(DNSResolver)
 }
 
 func DefaultUserAgent() string {

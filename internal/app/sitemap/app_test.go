@@ -191,6 +191,8 @@ func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
 		"Use --list-error-slugs to see the available values.",
 		"When both --url and --hostname are provided, --url wins.",
 		"Escalate selected scope validation findings from warning to critical.",
+		"--cache-backend",
+		"redis+unix:///var/run/redis.sock?db=0",
 		"json emits the structured sitemap waterfall report for external renderers.",
 	}
 	for _, snippet := range wantSnippets {
@@ -201,6 +203,51 @@ func TestRunHelpMentionsConflictSensitiveOptions(t *testing.T) {
 	if !strings.Contains(output, "check_habr_sitemap") {
 		t.Fatalf("Run() help output = %q, want installed binary name", output)
 	}
+}
+
+func TestRunJSONOutputIncludesRuntimeCacheBackendStage(t *testing.T) {
+	originalRun := sitemapRun
+	t.Cleanup(func() { sitemapRun = originalRun })
+	sitemapRun = func(_ context.Context, cfg sitemap.Config) (*sitemap.Result, error) {
+		return &sitemap.Result{
+			Config:           cfg,
+			TargetSource:     "hostname",
+			EffectiveBaseURL: "https://example.com/",
+			DiscoveredVia:    "robots",
+			Entrypoints:      []string{"https://example.com/sitemap.xml"},
+		}, nil
+	}
+
+	exitCode, output := runWithCapturedStdout(t, testProgramName, []string{"-H", "example.com", "--output", "json", "--cache-backend", "internal://"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	var found bool
+	for _, stage := range report.Stages {
+		if stage.ID != "runtime.cache_backend" || len(stage.Checks) == 0 {
+			continue
+		}
+		found = true
+		if !containsKV(stage.Checks[0].Meta, "usage_state", "internal_only") {
+			t.Fatalf("runtime.cache_backend meta = %#v, want usage_state=internal_only", stage.Checks[0].Meta)
+		}
+	}
+	if !found {
+		t.Fatalf("report.Stages = %#v, want runtime.cache_backend", report.Stages)
+	}
+}
+
+func containsKV(items []checkreport.KV, key, value string) bool {
+	for _, item := range items {
+		if item.Key == key && item.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunJSONOutput(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 type CommonHelpConfig struct {
 	DefaultTimeout        string
 	TimeoutExamples       []string
+	CacheBackendExamples  []string
 	OutputJSONLine        string
 	IgnoreErrorsExample   string
 	IncludeIgnoreErrors   bool
@@ -19,6 +20,7 @@ type CommonHelpConfig struct {
 	IncludeVerbose        bool
 	IncludeOutput         bool
 	IncludeTimeout        bool
+	IncludeCacheBackend   bool
 }
 
 type HelpDocument struct {
@@ -42,6 +44,7 @@ func DefaultCommonHelpConfig(defaultTimeout, outputJSONLine, ignoreErrorsExample
 		IncludeVerbose:        true,
 		IncludeOutput:         true,
 		IncludeTimeout:        true,
+		IncludeCacheBackend:   true,
 	}
 }
 
@@ -112,6 +115,21 @@ func CommonHelpOptions(cfg CommonHelpConfig) []clihelp.Option {
 			Short:       "-t",
 			Long:        "--timeout",
 			Description: TimeoutOptionDescription(cfg.DefaultTimeout),
+			Examples:    examples,
+		})
+	}
+	if cfg.IncludeCacheBackend {
+		examples := append([]string(nil), cfg.CacheBackendExamples...)
+		if len(examples) == 0 {
+			examples = []string{
+				"--cache-backend internal://",
+				"--cache-backend redis://127.0.0.1:6379/0",
+				"--cache-backend redis+unix:///var/run/redis.sock?db=0",
+			}
+		}
+		out = append(out, clihelp.Option{
+			Long:        "--cache-backend",
+			Description: CacheBackendOptionDescription(),
 			Examples:    examples,
 		})
 	}

@@ -20,7 +20,16 @@ func DecodeEnumInput[T any](inputs *Inputs, key string, ref InputRef, allowed []
 		var zero T
 		return zero, ErrInvalidEnum(ref, raw, allowed...)
 	}
-	return value, nil
+	if raw == "" {
+		return value, nil
+	}
+	for _, candidate := range allowed {
+		if raw == candidate {
+			return value, nil
+		}
+	}
+	var zero T
+	return zero, ErrInvalidEnum(ref, raw, allowed...)
 }
 
 func ValidateMinInt(value int, ref InputRef, min int) error {

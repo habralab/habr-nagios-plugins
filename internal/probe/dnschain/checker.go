@@ -13,6 +13,7 @@ type Config struct {
 	Hostname       string
 	Zone           string
 	Timeout        time.Duration
+	CacheBackend   string
 	QueryTimeout   time.Duration
 	Verbosity      int
 	OutputMode     checkreport.OutputMode

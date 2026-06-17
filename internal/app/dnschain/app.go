@@ -1,6 +1,7 @@
 package dnschainapp
 
 import (
+	"context"
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
@@ -27,6 +28,9 @@ func Run(programName string, args []string) int {
 		UnknownExitCode: 3,
 		OutputMode:      func(cfg dnschain.Config) checkreport.OutputMode { return cfg.OutputMode },
 		Verbosity:       func(cfg dnschain.Config) int { return cfg.Verbosity },
+		DecorateReport: func(ctx context.Context, cfg dnschain.Config, report *checkreport.Report) {
+			probecli.DecorateReportWithCacheBackendInspection(ctx, cfg.CacheBackend, true, report)
+		},
 	})
 }
 
@@ -49,6 +53,7 @@ func parseFlags(binName string, args []string) (dnschain.Config, error) {
 	cfg.Hostname = inputs.String("hostname")
 	cfg.Zone = inputs.String("zone")
 	cfg.Timeout = resolved.Timeout
+	cfg.CacheBackend = resolved.CacheBackend
 	cfg.OutputMode = resolved.OutputMode
 	cfg.Verbosity = resolved.Verbosity
 	cfg.IgnoreErrors = resolved.IgnoreErrors

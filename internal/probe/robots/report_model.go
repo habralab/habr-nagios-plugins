@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 func (r *Result) reportView() *checkreport.Report {
@@ -53,6 +54,9 @@ func (r *Result) reportView() *checkreport.Report {
 		r.makeParseStage(),
 		r.makePolicyStage(),
 		r.makeBehaviorStage(),
+	}
+	if r.ResolverCacheStats != nil {
+		probecli.AppendResolverCacheUsageStage(&report, r.finalTarget(), *r.ResolverCacheStats, r.ResolverCacheTrace)
 	}
 	r.Report = report
 	return &r.Report

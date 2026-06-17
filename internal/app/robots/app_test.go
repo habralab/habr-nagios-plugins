@@ -146,6 +146,8 @@ func TestRunHelpMentionsPolicyOptions(t *testing.T) {
 		"Require at least one Sitemap directive.",
 		"Require one or more User-agent values to exist.",
 		"Fail when one or more Disallow rules are present exactly as written.",
+		"--cache-backend",
+		"redis+unix:///var/run/redis.sock?db=0",
 		"json emits the structured robots waterfall report for external renderers.",
 	} {
 		if !strings.Contains(output, snippet) {
@@ -155,6 +157,55 @@ func TestRunHelpMentionsPolicyOptions(t *testing.T) {
 	if !strings.Contains(output, "check_habr_robots") {
 		t.Fatalf("Run() help output = %q, want installed binary name", output)
 	}
+}
+
+func TestRunJSONOutputIncludesRuntimeCacheBackendStage(t *testing.T) {
+	originalRun := robotsRun
+	t.Cleanup(func() { robotsRun = originalRun })
+	robotsRun = func(_ context.Context, cfg robots.Config) (*robots.Result, error) {
+		result := &robots.Result{
+			Config:             cfg,
+			TargetSource:       "hostname",
+			EffectiveBaseURL:   "https://example.com",
+			EffectiveRobotsURL: "https://example.com/robots.txt",
+			FinalURL:           "https://example.com/robots.txt",
+			StatusCode:         200,
+			Encoding:           "utf-8",
+			Perf:               robots.PerfStats{},
+		}
+		return result, nil
+	}
+
+	exitCode, output := runWithCapturedStdout(t, testProgramName, []string{"-H", "example.com", "--output", "json", "--cache-backend", "redis://127.0.0.1:6379/0"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0", exitCode)
+	}
+	var report checkreport.Report
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
+	}
+	var found bool
+	for _, stage := range report.Stages {
+		if stage.ID != "runtime.cache_backend" || len(stage.Checks) == 0 {
+			continue
+		}
+		found = true
+		if !containsKV(stage.Checks[0].Meta, "usage_state", "active") {
+			t.Fatalf("runtime.cache_backend meta = %#v, want usage_state=active", stage.Checks[0].Meta)
+		}
+	}
+	if !found {
+		t.Fatalf("report.Stages = %#v, want runtime.cache_backend", report.Stages)
+	}
+}
+
+func containsKV(items []checkreport.KV, key, value string) bool {
+	for _, item := range items {
+		if item.Key == key && item.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunJSONOutput(t *testing.T) {

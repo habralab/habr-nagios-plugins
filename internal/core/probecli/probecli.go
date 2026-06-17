@@ -51,6 +51,7 @@ type AppSpec[C any, R ResultOutput] struct {
 	UnknownExitCode   int
 	OutputMode        func(cfg C) checkreport.OutputMode
 	Verbosity         func(cfg C) int
+	DecorateReport    func(ctx context.Context, cfg C, report *checkreport.Report)
 }
 
 type CommonFlags struct {
@@ -58,6 +59,7 @@ type CommonFlags struct {
 	baseVerbosity   int
 	Timeout         string
 	Output          string
+	CacheBackend    string
 	IgnoreErrorsRaw string
 	Verbosity       int
 	ShowHelp        bool
@@ -68,6 +70,7 @@ type CommonFlags struct {
 type CommonOptions struct {
 	Timeout        time.Duration
 	OutputMode     checkreport.OutputMode
+	CacheBackend   string
 	IgnoreErrors   []string
 	IgnoreErrorSet map[string]bool
 	Verbosity      int
@@ -117,6 +120,14 @@ func OutputModeOptionDescription(jsonLine string) string {
 		"Default: nagios."
 }
 
+func CacheBackendOptionDescription() string {
+	return "Optional shared cache backend DSN.\n" +
+		"internal:// keeps only per-run in-process cache state.\n" +
+		"redis://host:port[/db] uses Redis over TCP.\n" +
+		"redis+unix:///path/to/redis.sock?db=N uses Redis over a Unix socket.\n" +
+		"Unsupported or unreachable backends are reported in runtime diagnostics and do not change probe status."
+}
+
 func EffectiveProgramName(programName, defaultBinaryName string) string {
 	name := strings.TrimSpace(filepath.Base(programName))
 	if name == "" || name == "." || name == string(filepath.Separator) {
@@ -148,6 +159,7 @@ func (f *CommonFlags) Register(fs *flag.FlagSet, defaultTimeout string) {
 	fs.StringVar(&f.Timeout, "t", defaultTimeout, "overall timeout")
 	fs.StringVar(&f.Timeout, "timeout", defaultTimeout, "overall timeout")
 	fs.StringVar(&f.Output, "output", "nagios", "output mode: nagios|json")
+	fs.StringVar(&f.CacheBackend, "cache-backend", "", "shared cache backend DSN")
 	fs.StringVar(&f.IgnoreErrorsRaw, "ignore-errors", "", "comma-separated error slugs to suppress")
 	fs.IntVar(&f.Verbosity, "v", 0, "verbosity level 0..3")
 	fs.IntVar(&f.Verbosity, "verbose", 0, "verbosity level 0..3")
@@ -175,6 +187,7 @@ func (f *CommonFlags) Resolve(hasSlug func(string) bool) (CommonOptions, error) 
 	return CommonOptions{
 		Timeout:        timeout,
 		OutputMode:     outputMode,
+		CacheBackend:   strings.TrimSpace(f.CacheBackend),
 		IgnoreErrors:   ignoreErrors,
 		IgnoreErrorSet: ignoreErrorSet,
 		Verbosity:      verbosity.Clamp(f.baseVerbosity + f.Verbosity),
@@ -340,6 +353,11 @@ func RunApp[C any, R ResultOutput](spec AppSpec[C, R]) int {
 	if err != nil {
 		fmt.Fprint(outputWriter(), RenderEarlyError(spec.Probe, "", spec.OutputMode(cfg), err))
 		return spec.UnknownExitCode
+	}
+	if spec.DecorateReport != nil {
+		if carrier, ok := any(result).(interface{ ProbeReport() *checkreport.Report }); ok {
+			spec.DecorateReport(ctx, cfg, carrier.ProbeReport())
+		}
 	}
 
 	rendered, exitCode, err := RenderResult(result, spec.OutputMode(cfg), spec.Verbosity(cfg))

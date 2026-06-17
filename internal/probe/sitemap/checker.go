@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
@@ -52,6 +53,7 @@ type Config struct {
 	MaxFiles       int
 	MaxURLs        int
 	HTTP           httpx.Options
+	CacheBackend   string
 	Timeout        time.Duration
 	HTTPClient     *http.Client
 	FallbackPaths  []string
@@ -81,24 +83,26 @@ func DefaultConfig() Config {
 }
 
 type Result struct {
-	Config           Config
-	Report           checkreport.Report
-	StartedAt        time.Time
-	Entrypoints      []string
-	Documents        []DocumentResult
-	Problems         []Problem
-	IgnoredProblems  []Problem
-	RuleChecks       []checkreport.Check
-	DiscoveryTrace   []string
-	HTTPTrace        []HTTPCall
-	DiscoveredVia    string
-	TargetSource     string
-	EffectiveBaseURL string
-	CrossHostTrust   map[string]bool // map["host:port"]verified
-	CrossHostChecks  map[string]crossHostCheck
-	MaxObservedDepth int
-	TotalURLs        int
-	Perf             PerfStats
+	Config             Config
+	Report             checkreport.Report
+	StartedAt          time.Time
+	Entrypoints        []string
+	Documents          []DocumentResult
+	Problems           []Problem
+	IgnoredProblems    []Problem
+	RuleChecks         []checkreport.Check
+	DiscoveryTrace     []string
+	HTTPTrace          []HTTPCall
+	DiscoveredVia      string
+	TargetSource       string
+	EffectiveBaseURL   string
+	CrossHostTrust     map[string]bool // map["host:port"]verified
+	CrossHostChecks    map[string]crossHostCheck
+	MaxObservedDepth   int
+	TotalURLs          int
+	Perf               PerfStats
+	ResolverCacheStats *dnsresolver.CacheStats
+	ResolverCacheTrace []dnsresolver.CacheTrace
 }
 
 type crossHostCheck struct {
@@ -214,7 +218,22 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	client := cfg.HTTPClient
+	var resolverStatsProvider interface{ CacheStats() dnsresolver.CacheStats }
+	var resolverTraceProvider interface {
+		CacheTrace() []dnsresolver.CacheTrace
+	}
 	if client == nil {
+		cfg.HTTP.CacheBackend = cfg.CacheBackend
+		cfg.HTTP.ResolverObserver = func(resolver httpx.DNSResolver) {
+			if provider, ok := resolver.(interface{ CacheStats() dnsresolver.CacheStats }); ok {
+				resolverStatsProvider = provider
+			}
+			if provider, ok := resolver.(interface {
+				CacheTrace() []dnsresolver.CacheTrace
+			}); ok {
+				resolverTraceProvider = provider
+			}
+		}
 		client = httpx.NewClient(cfg.Timeout, cfg.HTTP)
 	}
 	result := &Result{
@@ -226,6 +245,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	defer func() {
 		result.Perf.Elapsed = time.Since(startedAt)
 		result.updateRuntimeStats()
+		if resolverStatsProvider != nil {
+			stats := resolverStatsProvider.CacheStats()
+			result.ResolverCacheStats = &stats
+		}
+		if resolverTraceProvider != nil {
+			result.ResolverCacheTrace = resolverTraceProvider.CacheTrace()
+		}
 	}()
 	if baseSite != "" {
 		result.trustHost(baseSite)

@@ -26,6 +26,8 @@ func (r *Result) Detail() string {
 		checkreport.DetailSection{Render: func(b *strings.Builder) { writeTargetSection(b, report, verbosity) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) { writeHTTPSection(b, report, verbosity) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) { writeParsedSection(b, report, verbosity) }},
+		checkreport.DetailSection{MinVerbosity: 1, Render: func(b *strings.Builder) { writeResolverCacheSection(b, report, verbosity) }},
+		checkreport.DetailSection{MinVerbosity: 2, Render: func(b *strings.Builder) { writeResolverTraceSection(b, report, verbosity) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) { checkreport.WriteRuleChecksSection(b, "rules", ruleChecks) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) { checkreport.WriteFindingsSection(b, "problems", report.Findings, false) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) {
@@ -36,6 +38,10 @@ func (r *Result) Detail() string {
 
 func (r *Result) JSON() ([]byte, error) {
 	return r.reportView().JSON()
+}
+
+func (r *Result) ProbeReport() *checkreport.Report {
+	return r.reportView()
 }
 
 func writeTargetSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
@@ -91,6 +97,14 @@ func writeParsedSection(b *strings.Builder, report *checkreport.Report, verbosit
 			}
 		}
 	}
+}
+
+func writeResolverCacheSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	checkreport.WriteStageMessagesSection(b, report, "resolver_cache", "resolver.cache_usage", verbosity, "resolver.cache_usage.summary")
+}
+
+func writeResolverTraceSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	checkreport.WriteTraceMessageSection(b, "resolver_trace", report.Traces, verbosity, "resolver")
 }
 
 func (r *Result) addRule(status, name, target, detail string) {

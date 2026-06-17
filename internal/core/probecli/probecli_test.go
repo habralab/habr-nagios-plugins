@@ -742,3 +742,32 @@ func TestDecodeTimeoutInputTreatsBareIntegersAsSeconds(t *testing.T) {
 		t.Fatalf("DecodeTimeoutInput() = %v, want %v", got, want)
 	}
 }
+
+func TestDecodeEnumInputRejectsParsedButDisallowedValue(t *testing.T) {
+	parser, err := NewParser("check_probe", []string{"--transport", "quic"})
+	if err != nil {
+		t.Fatalf("NewParser() error = %v", err)
+	}
+	parser.RegisterCommon("30s")
+	if err := parser.RegisterInputs(
+		InputSpec{Key: "transport", Type: InputString, Aliases: []InputAlias{{Long: "transport", Usage: "transport"}}},
+	); err != nil {
+		t.Fatalf("RegisterInputs() error = %v", err)
+	}
+	_, inputs, err := parser.Parse(func(string) bool { return true }, nil)
+	if err != nil {
+		t.Fatalf("Parser.Parse() error = %v", err)
+	}
+
+	_, err = DecodeEnumInput(inputs, "transport", InputRefTransport, []string{"tcp"}, func(raw string) (string, error) {
+		switch raw {
+		case "tcp", "quic":
+			return raw, nil
+		default:
+			return "", fmt.Errorf("bad")
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), `invalid --transport "quic": want tcp`) {
+		t.Fatalf("DecodeEnumInput() error = %v, want allowed-set validation error", err)
+	}
+}

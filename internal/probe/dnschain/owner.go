@@ -39,10 +39,25 @@ func probeOwnerName(ctx context.Context, resolver *dnsresolver.Resolver, owner, 
 	var sawAddress bool
 	var sawForeignZoneCNAME bool
 	authority := dnsresolver.AuthoritativeServersFromAddrs(internalServerAddrs(servers))
-	aResults, err := resolver.ResolveAuthoritative(ctx, owner, dns.TypeA, authority, dnsresolver.ResolveOptions{
+	batchResults := resolver.ResolveAuthoritativeBatch(ctx, authority, dnsresolver.ResolveOptions{
 		Fanout: dnsresolver.FanoutAllAuthoritative,
+	}, []dnsresolver.Question{
+		{QName: owner, QType: dns.TypeA},
+		{QName: owner, QType: dns.TypeAAAA},
 	})
-	if err != nil {
+	if len(batchResults) != 2 {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "owner.a",
+			State:   checkreport.CheckUnknown,
+			Subject: owner,
+			Message: "authoritative owner batch returned an unexpected result set",
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_owner_probe_failed", owner, "authoritative owner batch returned an unexpected result set"))
+		return stage, result
+	}
+	aResults := batchResults[0].Result
+	if err := batchResults[0].Err; err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "owner.a",
@@ -53,10 +68,8 @@ func probeOwnerName(ctx context.Context, resolver *dnsresolver.Resolver, owner, 
 		result.Findings = append(result.Findings, unknownFinding("dnschain_owner_probe_failed", owner, fmt.Sprintf("authoritative A fanout failed: %v", err)))
 		return stage, result
 	}
-	aaaaResults, err := resolver.ResolveAuthoritative(ctx, owner, dns.TypeAAAA, authority, dnsresolver.ResolveOptions{
-		Fanout: dnsresolver.FanoutAllAuthoritative,
-	})
-	if err != nil {
+	aaaaResults := batchResults[1].Result
+	if err := batchResults[1].Err; err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "owner.aaaa",

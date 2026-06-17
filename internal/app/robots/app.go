@@ -1,6 +1,7 @@
 package robotsapp
 
 import (
+	"context"
 	"fmt"
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
@@ -34,6 +35,9 @@ func Run(programName string, args []string) int {
 		UnknownExitCode: robots.ExitUnknown,
 		OutputMode:      func(cfg robots.Config) checkreport.OutputMode { return cfg.OutputMode },
 		Verbosity:       func(cfg robots.Config) int { return cfg.Verbosity },
+		DecorateReport: func(ctx context.Context, cfg robots.Config, report *checkreport.Report) {
+			probecli.DecorateReportWithCacheBackendInspection(ctx, cfg.CacheBackend, cfg.HTTPClient == nil, report)
+		},
 	})
 }
 
@@ -66,6 +70,7 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	cfg.HTTP.UserAgent = inputs.String("user_agent")
 	cfg.HTTP.InsecureSkipVerify = inputs.Bool("insecure_skip_verify")
 	cfg.Timeout = resolved.Timeout
+	cfg.CacheBackend = resolved.CacheBackend
 	cfg.Verbosity = resolved.Verbosity
 	cfg.OutputMode = resolved.OutputMode
 	cfg.IgnoreErrors = resolved.IgnoreErrors

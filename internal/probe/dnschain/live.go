@@ -10,6 +10,7 @@ import (
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/dnsprobe"
 	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 	"github.com/miekg/dns"
 )
 
@@ -27,6 +28,7 @@ func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (che
 	defer cancel()
 	started := time.Now()
 	resolver := dnsresolver.NewResolver(cfg.QueryTimeout)
+	resolver.ConfigureSharedCacheBackendDSN(cfg.CacheBackend)
 	report := checkreport.Report{
 		Probe:         Meta.Slug,
 		Target:        target,
@@ -44,6 +46,9 @@ func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (che
 			{Key: "root_trust_anchors", Value: fmt.Sprintf("%d", dnsresolver.RootTrustAnchorCount())},
 		},
 	}
+	defer func() {
+		probecli.AppendResolverCacheUsageStage(&report, target, resolver.CacheStats(), resolver.CacheTrace())
+	}()
 
 	rootStage, rootProbe := probeRootTrustAnchors(ctx, resolver)
 	report.Traces = append(report.Traces, rootProbe.Traces...)
@@ -285,12 +290,29 @@ func probeChildZone(ctx context.Context, resolver *dnsresolver.Resolver, zone st
 	var nsec3ParamBaseline []*dns.NSEC3PARAM
 	groups := groupNSAddrsByName(servers)
 	authority := dnsresolver.AuthoritativeServersFromAddrs(internalServerAddrs(servers))
-
-	soaResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeSOA, authority, dnsresolver.ResolveOptions{
+	resolveOpts := dnsresolver.ResolveOptions{
 		Fanout:      dnsresolver.FanoutAllAuthoritative,
 		Consistency: dnsresolver.ConsistencyObserve,
+	}
+	batch := resolver.ResolveAuthoritativeBatch(ctx, authority, resolveOpts, []dnsresolver.Question{
+		{QName: zone, QType: dns.TypeSOA},
+		{QName: zone, QType: dns.TypeNS},
+		{QName: zone, QType: dns.TypeDNSKEY},
+		{QName: zone, QType: dns.TypeNSEC3PARAM},
 	})
-	if err != nil {
+	if len(batch) != 4 {
+		stage.Status = checkreport.StatusUnknown
+		stage.Checks = append(stage.Checks, checkreport.Check{
+			ID:      "soa.resolve",
+			State:   checkreport.CheckUnknown,
+			Subject: zone,
+			Message: "authoritative child batch returned an unexpected result set",
+		})
+		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, "authoritative child batch returned an unexpected result set"))
+		return stage, result
+	}
+	soaResults := batch[0].Result
+	if err := batch[0].Err; err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "soa.resolve",
@@ -301,11 +323,8 @@ func probeChildZone(ctx context.Context, resolver *dnsresolver.Resolver, zone st
 		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("SOA authoritative fanout failed: %v", err)))
 		return stage, result
 	}
-	nsResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeNS, authority, dnsresolver.ResolveOptions{
-		Fanout:      dnsresolver.FanoutAllAuthoritative,
-		Consistency: dnsresolver.ConsistencyObserve,
-	})
-	if err != nil {
+	nsResults := batch[1].Result
+	if err := batch[1].Err; err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "ns.resolve",
@@ -316,11 +335,8 @@ func probeChildZone(ctx context.Context, resolver *dnsresolver.Resolver, zone st
 		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("NS authoritative fanout failed: %v", err)))
 		return stage, result
 	}
-	dnskeyResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeDNSKEY, authority, dnsresolver.ResolveOptions{
-		Fanout:      dnsresolver.FanoutAllAuthoritative,
-		Consistency: dnsresolver.ConsistencyObserve,
-	})
-	if err != nil {
+	dnskeyResults := batch[2].Result
+	if err := batch[2].Err; err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "dnskey.resolve",
@@ -331,11 +347,8 @@ func probeChildZone(ctx context.Context, resolver *dnsresolver.Resolver, zone st
 		result.Findings = append(result.Findings, unknownFinding("dnschain_child_authority_probe_failed", zone, fmt.Sprintf("DNSKEY authoritative fanout failed: %v", err)))
 		return stage, result
 	}
-	nsec3Results, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeNSEC3PARAM, authority, dnsresolver.ResolveOptions{
-		Fanout:      dnsresolver.FanoutAllAuthoritative,
-		Consistency: dnsresolver.ConsistencyObserve,
-	})
-	if err != nil {
+	nsec3Results := batch[3].Result
+	if err := batch[3].Err; err != nil {
 		stage.Status = checkreport.StatusUnknown
 		stage.Checks = append(stage.Checks, checkreport.Check{
 			ID:      "nsec3param.resolve",

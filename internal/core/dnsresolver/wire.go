@@ -42,6 +42,7 @@ type delegationHop struct {
 	ParentServers []nsAddr
 	ChildNS       []string
 	ChildServers  []nsAddr
+	CacheTTL      time.Duration
 }
 
 func exchangeDNS(ctx context.Context, server, qname string, qtype uint16, do bool) (*exchangeResult, error) {
@@ -256,6 +257,7 @@ func resolveIterative(ctx context.Context, qname string, qtype uint16) (*iterati
 				ParentServers: append([]nsAddr(nil), servers...),
 				ChildNS:       append([]string(nil), ref.NS...),
 				ChildServers:  append([]nsAddr(nil), childServers...),
+				CacheTTL:      referralTTL(res.Msg, ref.Zone, ref.NS),
 			})
 			servers = childServers
 			currentZone = ref.Zone
@@ -321,6 +323,7 @@ func buildZoneChainWithResolver(
 			ParentServers: append([]nsAddr(nil), parentServers...),
 			ChildNS:       append([]string(nil), ref.NS...),
 			ChildServers:  append([]nsAddr(nil), childServers...),
+			CacheTTL:      referralTTL(res.Msg, childZone, ref.NS),
 		})
 		parentZone = childZone
 		parentServers = childServers

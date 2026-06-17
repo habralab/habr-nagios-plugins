@@ -30,6 +30,8 @@ func (r *Result) Detail() string {
 		checkreport.DetailSection{Render: func(b *strings.Builder) { writeEntrypointsSection(b, report, verbosity) }},
 		checkreport.DetailSection{MinVerbosity: 1, Render: func(b *strings.Builder) { writeDocumentsSection(b, report, verbosity) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) { writeHTTPSection(b, report, verbosity) }},
+		checkreport.DetailSection{MinVerbosity: 1, Render: func(b *strings.Builder) { writeResolverCacheSection(b, report, verbosity) }},
+		checkreport.DetailSection{MinVerbosity: 2, Render: func(b *strings.Builder) { writeResolverTraceSection(b, report, verbosity) }},
 		checkreport.DetailSection{MinVerbosity: 1, Render: func(b *strings.Builder) { writePerformanceSection(b, report, verbosity) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) { checkreport.WriteFindingsSection(b, "problems", report.Findings, false) }},
 		checkreport.DetailSection{Render: func(b *strings.Builder) {
@@ -40,6 +42,10 @@ func (r *Result) Detail() string {
 
 func (r *Result) JSON() ([]byte, error) {
 	return r.reportView().JSON()
+}
+
+func (r *Result) ProbeReport() *checkreport.Report {
+	return r.reportView()
 }
 
 func (r *Result) summaryPerfdata(partial bool) string {
@@ -106,6 +112,14 @@ func writeHTTPSection(b *strings.Builder, report *checkreport.Report, verbosity 
 
 func writePerformanceSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
 	checkreport.WriteStageMessagesSection(b, report, "performance", "performance", verbosity)
+}
+
+func writeResolverCacheSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	checkreport.WriteStageMessagesSection(b, report, "resolver_cache", "resolver.cache_usage", verbosity, "resolver.cache_usage.summary")
+}
+
+func writeResolverTraceSection(b *strings.Builder, report *checkreport.Report, verbosity int) {
+	checkreport.WriteTraceMessageSection(b, "resolver_trace", report.Traces, verbosity, "resolver")
 }
 
 func (r *Result) addTrace(format string, args ...any) {

@@ -18,6 +18,8 @@ func CommonEnglishSource() Source {
 			"common_section_entrypoints":         {Summary: "Entrypoints"},
 			"common_section_documents":           {Summary: "Documents"},
 			"common_section_performance":         {Summary: "Performance"},
+			"common_section_resolver_cache":      {Summary: "Resolver Cache"},
+			"common_section_resolver_trace":      {Summary: "Resolver Trace"},
 			"common_section_problems":            {Summary: "Problems"},
 			"common_section_ignored_problems":    {Summary: "Ignored Problems"},
 			"common_help_show_help":              {Summary: "Show help"},

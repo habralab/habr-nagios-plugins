@@ -58,6 +58,148 @@ func TestResolverLookupCachesPerQNameAndType(t *testing.T) {
 	}
 }
 
+func TestResolverLookupReusesAuthorityDiscoveryAcrossRRTypes(t *testing.T) {
+	r := NewResolver(0)
+
+	iterativeCalls := 0
+	validateCalls := 0
+	r.iterativeFn = func(_ context.Context, qname string, qtype uint16) (*iterativeResult, error) {
+		iterativeCalls++
+		msg := &dns.Msg{
+			Answer: []dns.RR{
+				&dns.A{
+					Hdr: dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+					A:   net.IPv4(192, 0, 2, 10),
+				},
+			},
+		}
+		return &iterativeResult{
+			Response: exchangeResult{Msg: msg},
+			Hops: []delegationHop{{
+				ToZone:       "example.com.",
+				ChildServers: []nsAddr{{Name: "ns1.example.com.", Addr: "192.0.2.53:53"}},
+			}},
+		}, nil
+	}
+	r.validateFn = func(_ context.Context, zone string, _ []nsAddr) (SecurityState, []*dns.DNSKEY, string, error) {
+		validateCalls++
+		if zone != "example.com." {
+			t.Fatalf("zone = %q, want example.com.", zone)
+		}
+		return SecurityInsecure, nil, "unsigned delegation", nil
+	}
+
+	origExchange := resolveExchangeFn
+	defer func() { resolveExchangeFn = origExchange }()
+	resolveExchangeFn = func(_ context.Context, server, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+		msg := &dns.Msg{MsgHdr: dns.MsgHdr{Authoritative: true}}
+		if qtype == dns.TypeAAAA {
+			msg.Answer = []dns.RR{
+				&dns.AAAA{
+					Hdr:  dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 300},
+					AAAA: net.ParseIP("2001:db8::10"),
+				},
+			}
+		}
+		return &exchangeResult{
+			Server:  nsAddr{Name: "ns1.example.com.", Addr: server},
+			Network: "udp",
+			Msg:     msg,
+		}, nil
+	}
+
+	if _, err := r.Lookup(context.Background(), "www.example.com", dns.TypeA); err != nil {
+		t.Fatalf("A Lookup() error = %v", err)
+	}
+	got, err := r.Lookup(context.Background(), "www.example.com", dns.TypeAAAA)
+	if err != nil {
+		t.Fatalf("AAAA Lookup() error = %v", err)
+	}
+	if iterativeCalls != 1 {
+		t.Fatalf("iterativeCalls = %d, want 1 shared authority discovery", iterativeCalls)
+	}
+	if validateCalls != 1 {
+		t.Fatalf("validateCalls = %d, want 1 shared zone validation", validateCalls)
+	}
+	if len(got.Records) != 1 {
+		t.Fatalf("len(AAAA records) = %d, want 1", len(got.Records))
+	}
+	if _, ok := got.Records[0].(*dns.AAAA); !ok {
+		t.Fatalf("AAAA record = %T, want *dns.AAAA", got.Records[0])
+	}
+}
+
+func TestResolverLookupReusesAuthorityAcrossOwnersWithinSameZone(t *testing.T) {
+	r := NewResolver(0)
+
+	iterativeCalls := 0
+	validateCalls := 0
+	r.iterativeFn = func(_ context.Context, qname string, qtype uint16) (*iterativeResult, error) {
+		iterativeCalls++
+		msg := &dns.Msg{
+			Answer: []dns.RR{
+				&dns.A{
+					Hdr: dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+					A:   net.IPv4(192, 0, 2, 10),
+				},
+			},
+		}
+		return &iterativeResult{
+			Response: exchangeResult{Msg: msg},
+			Hops: []delegationHop{{
+				ToZone:       "example.com.",
+				ChildServers: []nsAddr{{Name: "ns1.example.com.", Addr: "192.0.2.53:53"}},
+			}},
+		}, nil
+	}
+	r.validateFn = func(_ context.Context, zone string, _ []nsAddr) (SecurityState, []*dns.DNSKEY, string, error) {
+		validateCalls++
+		if zone != "example.com." {
+			t.Fatalf("zone = %q, want example.com.", zone)
+		}
+		return SecurityInsecure, nil, "unsigned delegation", nil
+	}
+
+	origExchange := resolveExchangeFn
+	defer func() { resolveExchangeFn = origExchange }()
+	resolveExchangeFn = func(_ context.Context, server, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+		msg := &dns.Msg{MsgHdr: dns.MsgHdr{Authoritative: true}}
+		msg.Answer = []dns.RR{
+			&dns.CAA{
+				Hdr:   dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: 300},
+				Flag:  0,
+				Tag:   "issue",
+				Value: "letsencrypt.org",
+			},
+		}
+		return &exchangeResult{
+			Server:  nsAddr{Name: "ns1.example.com.", Addr: server},
+			Network: "udp",
+			Msg:     msg,
+		}, nil
+	}
+
+	if _, err := r.Lookup(context.Background(), "www.example.com", dns.TypeA); err != nil {
+		t.Fatalf("A Lookup() error = %v", err)
+	}
+	got, err := r.Lookup(context.Background(), "_443._tcp.www.example.com", dns.TypeCAA)
+	if err != nil {
+		t.Fatalf("CAA Lookup() error = %v", err)
+	}
+	if iterativeCalls != 1 {
+		t.Fatalf("iterativeCalls = %d, want 1 shared zone authority discovery", iterativeCalls)
+	}
+	if validateCalls != 1 {
+		t.Fatalf("validateCalls = %d, want 1 shared zone validation", validateCalls)
+	}
+	if len(got.Records) != 1 {
+		t.Fatalf("len(CAA records) = %d, want 1", len(got.Records))
+	}
+	if _, ok := got.Records[0].(*dns.CAA); !ok {
+		t.Fatalf("CAA record = %T, want *dns.CAA", got.Records[0])
+	}
+}
+
 func TestResolverLookupEffectiveCAAUsesLookupCache(t *testing.T) {
 	r := NewResolver(0)
 	lookups := 0
@@ -159,6 +301,65 @@ func TestResolverResolveAllAuthoritativeCollectsResponsesAndConsistency(t *testi
 	}
 }
 
+func TestResolverResolveAllAuthoritativeReusesCachedAuthority(t *testing.T) {
+	r := NewResolver(0)
+	iterativeCalls := 0
+	r.iterativeFn = func(_ context.Context, qname string, qtype uint16) (*iterativeResult, error) {
+		iterativeCalls++
+		msg := &dns.Msg{
+			Answer: []dns.RR{
+				&dns.A{
+					Hdr: dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+					A:   net.IPv4(192, 0, 2, 10),
+				},
+			},
+		}
+		return &iterativeResult{
+			Response: exchangeResult{Msg: msg},
+			Hops: []delegationHop{{
+				ToZone: "example.com.",
+				ChildServers: []nsAddr{
+					{Name: "ns1.example.com.", Addr: "192.0.2.53:53"},
+					{Name: "ns2.example.com.", Addr: "192.0.2.54:53"},
+				},
+			}},
+		}, nil
+	}
+	r.validateFn = func(_ context.Context, _ string, _ []nsAddr) (SecurityState, []*dns.DNSKEY, string, error) {
+		return SecurityInsecure, nil, "unsigned delegation", nil
+	}
+
+	origExchange := resolveExchangeFn
+	defer func() { resolveExchangeFn = origExchange }()
+	resolveExchangeFn = func(_ context.Context, server, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+		msg := &dns.Msg{MsgHdr: dns.MsgHdr{Authoritative: true}}
+		msg.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: dns.Fqdn(qname), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.IPv4(192, 0, 2, 10),
+			},
+		}
+		return &exchangeResult{
+			Server:  nsAddr{Name: server, Addr: server},
+			Network: "udp",
+			Msg:     msg,
+		}, nil
+	}
+
+	if _, err := r.Lookup(context.Background(), "www.example.com", dns.TypeA); err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+	if _, err := r.Resolve(context.Background(), "www.example.com", dns.TypeA, ResolveOptions{
+		Fanout:      FanoutAllAuthoritative,
+		Consistency: ConsistencyObserve,
+	}); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if iterativeCalls != 1 {
+		t.Fatalf("iterativeCalls = %d, want cached authority reuse", iterativeCalls)
+	}
+}
+
 func TestResolverResolveAuthoritativeCachesByServerSet(t *testing.T) {
 	r := NewResolver(0)
 	calls := 0
@@ -214,6 +415,23 @@ func TestResolverResolveAuthoritativeCachesByServerSet(t *testing.T) {
 	}
 }
 
+func TestResolveCacheKeyNormalizesAuthoritativeServerOrder(t *testing.T) {
+	opts := ResolveOptions{Fanout: FanoutAllAuthoritative, Consistency: ConsistencyObserve}
+	serversA := []AuthoritativeServer{
+		{Name: "ns2.example.com.", Endpoint: "192.0.2.54:53"},
+		{Name: "ns1.example.com.", Endpoint: "192.0.2.53:53"},
+	}
+	serversB := []AuthoritativeServer{
+		{Name: "ns1.example.com.", Endpoint: "192.0.2.53:53"},
+		{Name: "ns2.example.com.", Endpoint: "192.0.2.54:53"},
+	}
+	gotA := resolveCacheKey("www.example.com.", dns.TypeA, serversA, opts)
+	gotB := resolveCacheKey("www.example.com.", dns.TypeA, serversB, opts)
+	if gotA != gotB {
+		t.Fatalf("resolveCacheKey() order-sensitive:\nA=%q\nB=%q", gotA, gotB)
+	}
+}
+
 func TestResolverLookupUsesSOAOwnerAsFinalZone(t *testing.T) {
 	r := NewResolver(0)
 	r.iterativeFn = func(_ context.Context, qname string, qtype uint16) (*iterativeResult, error) {
@@ -249,5 +467,40 @@ func TestResolverLookupUsesSOAOwnerAsFinalZone(t *testing.T) {
 	_, err := r.Lookup(context.Background(), "_443._tcp.www.cloudflare.com.", dns.TypeTLSA)
 	if err != nil {
 		t.Fatalf("Lookup() error = %v", err)
+	}
+}
+
+func TestCachedDeepestSecureValidationPrefersDeepestSecureAncestor(t *testing.T) {
+	r := NewResolver(0)
+
+	rootKey := &dns.DNSKEY{Hdr: dns.RR_Header{Name: ".", Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET}}
+	comKey := &dns.DNSKEY{Hdr: dns.RR_Header{Name: "com.", Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET}}
+	r.storeValidation(".", validationResult{
+		Security: SecuritySecure,
+		Keys:     []*dns.DNSKEY{rootKey},
+		Message:  "root secure",
+	})
+	r.storeValidation("com.", validationResult{
+		Security: SecuritySecure,
+		Keys:     []*dns.DNSKEY{comKey},
+		Message:  "com secure",
+	})
+	r.storeValidation("example.com.", validationResult{
+		Security: SecurityBogus,
+		Message:  "example bogus",
+	})
+
+	zone, keys, msg, ok := r.cachedDeepestSecureValidation("www.example.com.")
+	if !ok {
+		t.Fatal("cachedDeepestSecureValidation() = not found, want cached secure ancestor")
+	}
+	if got, want := zone, "com."; got != want {
+		t.Fatalf("zone = %q, want %q", got, want)
+	}
+	if len(keys) != 1 || dns.Fqdn(keys[0].Header().Name) != "com." {
+		t.Fatalf("keys = %#v, want cached com DNSKEY", keys)
+	}
+	if got, want := msg, "com secure"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
 	}
 }

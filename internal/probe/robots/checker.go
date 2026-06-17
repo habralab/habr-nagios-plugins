@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
@@ -43,6 +44,7 @@ type Config struct {
 	OutputMode              checkreport.OutputMode
 	Verbosity               int
 	Timeout                 time.Duration
+	CacheBackend            string
 	HTTP                    httpx.Options
 	HTTPClient              *http.Client
 	RequireSitemap          bool
@@ -119,6 +121,8 @@ type Result struct {
 	HTTPTrace          []HTTPCall
 	Perf               PerfStats
 	Absent             bool
+	ResolverCacheStats *dnsresolver.CacheStats
+	ResolverCacheTrace []dnsresolver.CacheTrace
 }
 
 func Run(ctx context.Context, cfg Config) (*Result, error) {
@@ -136,7 +140,22 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	client := cfg.HTTPClient
+	var resolverStatsProvider interface{ CacheStats() dnsresolver.CacheStats }
+	var resolverTraceProvider interface {
+		CacheTrace() []dnsresolver.CacheTrace
+	}
 	if client == nil {
+		cfg.HTTP.CacheBackend = cfg.CacheBackend
+		cfg.HTTP.ResolverObserver = func(resolver httpx.DNSResolver) {
+			if provider, ok := resolver.(interface{ CacheStats() dnsresolver.CacheStats }); ok {
+				resolverStatsProvider = provider
+			}
+			if provider, ok := resolver.(interface {
+				CacheTrace() []dnsresolver.CacheTrace
+			}); ok {
+				resolverTraceProvider = provider
+			}
+		}
 		client = httpx.NewClient(cfg.Timeout, cfg.HTTP)
 	}
 	result := &Result{
@@ -157,6 +176,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	})
 	defer func() {
 		result.Perf.Elapsed = time.Since(startedAt)
+		if resolverStatsProvider != nil {
+			stats := resolverStatsProvider.CacheStats()
+			result.ResolverCacheStats = &stats
+		}
+		if resolverTraceProvider != nil {
+			result.ResolverCacheTrace = resolverTraceProvider.CacheTrace()
+		}
 	}()
 
 	res, err := fetch(ctx, client, cfg, robotsURL, result)
