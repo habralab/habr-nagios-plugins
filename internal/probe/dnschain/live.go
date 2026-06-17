@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/dnsprobe"
 	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
 	"github.com/miekg/dns"
 )
@@ -21,7 +22,9 @@ func init() {
 }
 
 func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (checkreport.Report, error) {
-	ctx = withDNSQueryTimeout(ctx, cfg.QueryTimeout)
+	var cancel context.CancelFunc
+	ctx, cancel = withDNSQueryTimeout(ctx, cfg.QueryTimeout)
+	defer cancel()
 	started := time.Now()
 	resolver := dnsresolver.NewResolver(cfg.QueryTimeout)
 	report := checkreport.Report{
@@ -114,42 +117,33 @@ func internalServers(values []dnsresolver.ServerAddr) []nsAddr {
 	return out
 }
 
+func internalServerAddrs(values []nsAddr) []dnsresolver.ServerAddr {
+	out := make([]dnsresolver.ServerAddr, 0, len(values))
+	for _, value := range uniqueNSAddrs(values) {
+		out = append(out, dnsresolver.ServerAddr{Name: value.Name, Addr: value.Addr})
+	}
+	return out
+}
+
 func discoverAuthority(ctx context.Context, resolver *dnsresolver.Resolver, cfg Config, target string) (*discoveryResult, error) {
-	fqdn := dns.Fqdn(target)
-	zone := fqdn
-	var hops []dnsresolver.DelegationHopInfo
-	if strings.TrimSpace(cfg.Zone) == "" {
-		discoveredZone, discoveredHops, err := resolver.DiscoverEnclosingZone(ctx, fqdn)
-		if err != nil {
-			return nil, err
-		}
-		zone = discoveredZone
-		hops = discoveredHops
+	discovery, err := dnsprobe.DiscoverAuthority(ctx, resolver, dnsprobe.AuthorityDiscoveryInput{
+		Owner:        target,
+		ExplicitZone: cfg.Zone,
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if len(hops) == 0 {
-		var err error
-		hops, err = resolver.ZoneChain(ctx, zone)
-		if err != nil {
-			return nil, err
-		}
-		if len(hops) == 0 {
-			return nil, fmt.Errorf("no zone chain discovered for %s", zone)
-		}
-	}
-
-	last := hops[len(hops)-1]
 	stage := checkreport.Stage{
 		ID:     "zone.discovery",
 		Title:  "Zone Discovery",
 		Status: checkreport.StatusOK,
-		Target: zone,
+		Target: discovery.Zone,
 		Checks: []checkreport.Check{
 			{
 				ID:      "zone.cut",
 				State:   checkreport.CheckPass,
-				Subject: zone,
-				Message: fmt.Sprintf("discovered zone cut %s via parent %s", last.ToZone, last.FromZone),
+				Subject: discovery.Zone,
+				Message: fmt.Sprintf("discovered zone cut %s via parent %s", discovery.Zone, discovery.ParentZone),
 				Meta: []checkreport.KV{
 					{Key: "explicit_zone", Value: fmt.Sprintf("%t", strings.TrimSpace(cfg.Zone) != "")},
 				},
@@ -157,7 +151,7 @@ func discoverAuthority(ctx context.Context, resolver *dnsresolver.Resolver, cfg 
 		},
 	}
 	var traces []checkreport.TraceEvent
-	for _, hop := range hops {
+	for _, hop := range discovery.Hops {
 		traces = append(traces, checkreport.TraceEvent{
 			Kind:    "delegation",
 			StageID: "zone.discovery",
@@ -171,12 +165,12 @@ func discoverAuthority(ctx context.Context, resolver *dnsresolver.Resolver, cfg 
 		})
 	}
 	return &discoveryResult{
-		Zone:          last.ToZone,
-		ParentZone:    last.FromZone,
-		DelegationNS:  append([]string(nil), last.ChildNS...),
-		ParentServers: internalServers(last.ParentServers),
-		ChildServers:  internalServers(last.ChildServers),
-		Hops:          append([]dnsresolver.DelegationHopInfo(nil), hops...),
+		Zone:          discovery.Zone,
+		ParentZone:    discovery.ParentZone,
+		DelegationNS:  append([]string(nil), discovery.DelegationNS...),
+		ParentServers: internalServers(discovery.ParentServers),
+		ChildServers:  internalServers(discovery.ChildServers),
+		Hops:          append([]dnsresolver.DelegationHopInfo(nil), discovery.Hops...),
 		Stage:         stage,
 		Traces:        traces,
 	}, nil
@@ -221,14 +215,6 @@ func groupNSAddrsByName(values []nsAddr) []nameserverEndpoints {
 			Name:      name,
 			Endpoints: uniqueNSAddrs(byName[name]),
 		})
-	}
-	return out
-}
-
-func authoritativeServers(values []nsAddr) []dnsresolver.AuthoritativeServer {
-	out := make([]dnsresolver.AuthoritativeServer, 0, len(values))
-	for _, value := range uniqueNSAddrs(values) {
-		out = append(out, dnsresolver.AuthoritativeServer{Name: value.Name, Endpoint: value.Addr})
 	}
 	return out
 }
@@ -298,7 +284,7 @@ func probeChildZone(ctx context.Context, resolver *dnsresolver.Resolver, zone st
 	var nsec3ParamFingerprint string
 	var nsec3ParamBaseline []*dns.NSEC3PARAM
 	groups := groupNSAddrsByName(servers)
-	authority := authoritativeServers(servers)
+	authority := dnsresolver.AuthoritativeServersFromAddrs(internalServerAddrs(servers))
 
 	soaResults, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeSOA, authority, dnsresolver.ResolveOptions{
 		Fanout:      dnsresolver.FanoutAllAuthoritative,
@@ -1080,7 +1066,7 @@ func probeDNSSECChain(ctx context.Context, resolver *dnsresolver.Resolver, hops 
 
 func collectParentDSEndpointResponses(ctx context.Context, resolver *dnsresolver.Resolver, hop dnsresolver.DelegationHopInfo, stage *checkreport.Stage, result *dnssecProbeResult) []parentDSEndpointResult {
 	var responses []parentDSEndpointResult
-	resolved, err := resolver.ResolveAuthoritative(ctx, hop.ToZone, dns.TypeDS, authoritativeServers(internalServers(hop.ParentServers)), dnsresolver.ResolveOptions{
+	resolved, err := resolver.ResolveAuthoritative(ctx, hop.ToZone, dns.TypeDS, dnsresolver.AuthoritativeServersFromAddrs(hop.ParentServers), dnsresolver.ResolveOptions{
 		Fanout:      dnsresolver.FanoutAllAuthoritative,
 		Consistency: dnsresolver.ConsistencyObserve,
 	})
@@ -1300,17 +1286,6 @@ func summarizeDSCoverage(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dns.RR
 	return summary
 }
 
-func soaAnswerFingerprint(msg *dns.Msg, owner string) string {
-	for _, rr := range msg.Answer {
-		soa, ok := rr.(*dns.SOA)
-		if !ok || dns.Fqdn(soa.Header().Name) != dns.Fqdn(owner) {
-			continue
-		}
-		return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%d", dns.Fqdn(soa.Ns), dns.Fqdn(soa.Mbox), soa.Serial, soa.Refresh, soa.Retry, soa.Expire, soa.Minttl)
-	}
-	return ""
-}
-
 func soaRRsetFingerprint(rrs []dns.RR, owner string) string {
 	for _, rr := range rrs {
 		soa, ok := rr.(*dns.SOA)
@@ -1386,7 +1361,7 @@ func assessParentDSConsistencyResponses(hop dnsresolver.DelegationHopInfo, respo
 }
 
 func collectDNSKEYEndpointSets(ctx context.Context, resolver *dnsresolver.Resolver, zone string, servers []nsAddr) ([]dnskeyEndpointResult, error) {
-	resolved, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeDNSKEY, authoritativeServers(servers), dnsresolver.ResolveOptions{
+	resolved, err := resolver.ResolveAuthoritative(ctx, zone, dns.TypeDNSKEY, dnsresolver.AuthoritativeServersFromAddrs(internalServerAddrs(servers)), dnsresolver.ResolveOptions{
 		Fanout:      dnsresolver.FanoutAllAuthoritative,
 		Consistency: dnsresolver.ConsistencyObserve,
 	})

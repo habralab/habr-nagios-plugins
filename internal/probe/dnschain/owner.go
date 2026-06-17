@@ -38,7 +38,7 @@ func probeOwnerName(ctx context.Context, resolver *dnsresolver.Resolver, owner, 
 	var sawCNAME bool
 	var sawAddress bool
 	var sawForeignZoneCNAME bool
-	authority := authoritativeServers(servers)
+	authority := dnsresolver.AuthoritativeServersFromAddrs(internalServerAddrs(servers))
 	aResults, err := resolver.ResolveAuthoritative(ctx, owner, dns.TypeA, authority, dnsresolver.ResolveOptions{
 		Fanout: dnsresolver.FanoutAllAuthoritative,
 	})

@@ -36,15 +36,17 @@ type EffectiveCAAResult struct {
 }
 
 type Resolver struct {
-	QueryTimeout  time.Duration
-	mu            sync.Mutex
-	lookupCache   map[string]LookupResult
-	resolveCache  map[string]ResolveResult
-	validateCache map[string]validationResult
-	hostAddrCache *hostAddressCache
-	familyCaps    familyCapabilityCache
-	iterativeFn   func(context.Context, string, uint16) (*iterativeResult, error)
-	validateFn    func(context.Context, string, []nsAddr) (SecurityState, []*dns.DNSKEY, string, error)
+	QueryTimeout   time.Duration
+	mu             sync.Mutex
+	lookupCache    map[string]LookupResult
+	resolveCache   map[string]ResolveResult
+	validateCache  map[string]validationResult
+	hostAddrCache  *hostAddressCache
+	execPolicy     executionPolicy
+	endpointHealth *endpointHealthTracker
+	familyCaps     familyCapabilityCache
+	iterativeFn    func(context.Context, string, uint16) (*iterativeResult, error)
+	validateFn     func(context.Context, string, []nsAddr) (SecurityState, []*dns.DNSKEY, string, error)
 }
 
 // NewResolver creates a per-session authoritative DNS/DNSSEC resolver.
@@ -52,11 +54,13 @@ type Resolver struct {
 // reuse repeated lookups and zone validations without sharing state across runs.
 func NewResolver(queryTimeout time.Duration) *Resolver {
 	r := &Resolver{
-		QueryTimeout:  queryTimeout,
-		lookupCache:   map[string]LookupResult{},
-		resolveCache:  map[string]ResolveResult{},
-		validateCache: map[string]validationResult{},
-		hostAddrCache: newHostAddressCache(),
+		QueryTimeout:   queryTimeout,
+		lookupCache:    map[string]LookupResult{},
+		resolveCache:   map[string]ResolveResult{},
+		validateCache:  map[string]validationResult{},
+		hostAddrCache:  newHostAddressCache(),
+		execPolicy:     defaultExecutionPolicy(),
+		endpointHealth: newEndpointHealthTracker(),
 	}
 	r.iterativeFn = func(ctx context.Context, qname string, qtype uint16) (*iterativeResult, error) {
 		return resolveIterative(ctx, qname, qtype)
@@ -85,6 +89,7 @@ func (r *Resolver) Lookup(ctx context.Context, qname string, qtype uint16) (Look
 	ctx = withDNSQueryTimeout(ctx, r.QueryTimeout)
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
 	ctx = withHostAddressCache(ctx, r.hostAddrCache)
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	fqdn := dns.Fqdn(qname)
 	cacheKey := lookupCacheKey(fqdn, qtype)
 
@@ -177,6 +182,7 @@ func (r *Resolver) Lookup(ctx context.Context, qname string, qtype uint16) (Look
 func (r *Resolver) LookupEffectiveCAA(ctx context.Context, qname string) (EffectiveCAAResult, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
 	ctx = withHostAddressCache(ctx, r.hostAddrCache)
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	current := dns.Fqdn(qname)
 	for {
 		lookup, err := r.Lookup(ctx, current, dns.TypeCAA)
@@ -197,6 +203,7 @@ func (r *Resolver) LookupEffectiveCAA(ctx context.Context, qname string) (Effect
 func (r *Resolver) cachedZoneValidation(ctx context.Context, zone string, finalServers []nsAddr) (SecurityState, []*dns.DNSKEY, string, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
 	ctx = withHostAddressCache(ctx, r.hostAddrCache)
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	zone = dns.Fqdn(zone)
 
 	r.mu.Lock()

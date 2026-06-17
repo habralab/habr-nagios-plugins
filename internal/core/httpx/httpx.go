@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
-	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
 )
 
 const (
@@ -40,22 +39,5 @@ func NewClient(timeout time.Duration, opts Options) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
-	}
-}
-
-func HelpOptions() []clihelp.Option {
-	return []clihelp.Option{
-		{
-			Long: "--insecure-skip-verify",
-			Description: "Disable TLS certificate verification for HTTP requests.\n" +
-				"Use only for diagnostics or when you intentionally want to inspect payload behavior behind broken TLS.",
-		},
-		{
-			Long:        "--user-agent",
-			Description: "Override the HTTP User-Agent header sent by the probe's HTTP requests.",
-			Examples: []string{
-				fmt.Sprintf(`--user-agent "%s"`, DefaultUserAgent()),
-			},
-		},
 	}
 }

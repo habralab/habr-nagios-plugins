@@ -2,10 +2,13 @@ package probecli
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -36,6 +39,20 @@ type ToggleAction struct {
 	ExitCode int
 }
 
+type AppSpec[C any, R ResultOutput] struct {
+	ProgramName       string
+	Args              []string
+	Probe             string
+	DefaultBinaryName string
+	Parse             func(binName string, args []string) (C, error)
+	BuildToggles      func(binName string, cfg C) []ToggleAction
+	Timeout           func(cfg C) time.Duration
+	Run               func(ctx context.Context, cfg C) (R, error)
+	UnknownExitCode   int
+	OutputMode        func(cfg C) checkreport.OutputMode
+	Verbosity         func(cfg C) int
+}
+
 type CommonFlags struct {
 	normalizedArgs  []string
 	baseVerbosity   int
@@ -57,6 +74,15 @@ type CommonOptions struct {
 	ShowHelp       bool
 	ShowVersion    bool
 	ShowErrorSlugs bool
+}
+
+var stdoutWriter io.Writer
+
+func outputWriter() io.Writer {
+	if stdoutWriter != nil {
+		return stdoutWriter
+	}
+	return os.Stdout
 }
 
 func IgnoreErrorsOptionDescription() string {
@@ -81,7 +107,7 @@ func VerboseOptionDescription() string {
 }
 
 func TimeoutOptionDescription(defaultValue string) string {
-	return msgcatalog.DefaultSummaryOrKey("common_help_timeout_prefix") + "\nDefault: " + strings.TrimSpace(defaultValue) + "."
+	return msgcatalog.DefaultSummaryOrKey("common_help_timeout_prefix") + "\nDefault: " + strings.TrimSpace(defaultValue) + ".\nBare integers are interpreted as seconds."
 }
 
 func OutputModeOptionDescription(jsonLine string) string {
@@ -159,6 +185,10 @@ func (f *CommonFlags) Resolve(hasSlug func(string) bool) (CommonOptions, error) 
 }
 
 func ParseTimeout(raw, flagName string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return time.Duration(seconds) * time.Second, nil
+	}
 	d, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", flagName, err)
@@ -239,19 +269,20 @@ func ParseOutputMode(raw string) (checkreport.OutputMode, error) {
 	case string(checkreport.OutputJSON):
 		return checkreport.OutputJSON, nil
 	default:
-		return "", fmt.Errorf("invalid --output %q, expected nagios or json", raw)
+		return "", ErrInvalidEnum(InputRefOutput, raw, "nagios", "json")
 	}
 }
 
 func RenderEarlyError(probe, target string, outputMode checkreport.OutputMode, err error) string {
+	message := FormatInputError(err, DefaultInputLabels())
 	if outputMode == checkreport.OutputJSON {
-		data, jsonErr := checkreport.EarlyErrorReport(probe, target, err.Error(), outputMode).JSON()
+		data, jsonErr := checkreport.EarlyErrorReport(probe, target, message, outputMode).JSON()
 		if jsonErr == nil {
 			return string(data) + "\n"
 		}
-		return fmt.Sprintf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, err.Error())
+		return fmt.Sprintf("{\"probe\":%q,\"status\":\"unknown\",\"summary\":%q}\n", probe, message)
 	}
-	return fmt.Sprintf("UNKNOWN - %v\n", err)
+	return fmt.Sprintf("UNKNOWN - %s\n", message)
 }
 
 func RenderResult(result ResultOutput, outputMode checkreport.OutputMode, verbosity int) (string, int, error) {
@@ -283,4 +314,39 @@ func VersionAction(binName string, enabled bool, exitCode int) ToggleAction {
 		Output:   buildinfo.String(binName) + "\n",
 		ExitCode: exitCode,
 	}
+}
+
+func RunApp[C any, R ResultOutput](spec AppSpec[C, R]) int {
+	binName := EffectiveProgramName(spec.ProgramName, spec.DefaultBinaryName)
+	requestedOutputMode := DetectOutputMode(spec.Args)
+
+	cfg, err := spec.Parse(binName, spec.Args)
+	if err != nil {
+		fmt.Fprint(outputWriter(), RenderEarlyError(spec.Probe, "", requestedOutputMode, err))
+		return spec.UnknownExitCode
+	}
+
+	if spec.BuildToggles != nil {
+		if output, exitCode, handled := DispatchToggleActions(spec.BuildToggles(binName, cfg)...); handled {
+			fmt.Fprint(outputWriter(), output)
+			return exitCode
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), spec.Timeout(cfg))
+	defer cancel()
+
+	result, err := spec.Run(ctx, cfg)
+	if err != nil {
+		fmt.Fprint(outputWriter(), RenderEarlyError(spec.Probe, "", spec.OutputMode(cfg), err))
+		return spec.UnknownExitCode
+	}
+
+	rendered, exitCode, err := RenderResult(result, spec.OutputMode(cfg), spec.Verbosity(cfg))
+	if err != nil {
+		fmt.Fprintf(outputWriter(), "UNKNOWN - %v\n", err)
+		return spec.UnknownExitCode
+	}
+	fmt.Fprint(outputWriter(), rendered)
+	return exitCode
 }

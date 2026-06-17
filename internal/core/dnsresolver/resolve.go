@@ -80,6 +80,7 @@ func DefaultResolveOptions() ResolveOptions {
 // for probes that need fanout, consistency observation, or per-endpoint material.
 func (r *Resolver) Resolve(ctx context.Context, qname string, qtype uint16, opts ResolveOptions) (ResolveResult, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	if opts.Fanout == "" {
 		opts.Fanout = FanoutFirstResponse
 	}
@@ -109,6 +110,7 @@ func (r *Resolver) Resolve(ctx context.Context, qname string, qtype uint16, opts
 
 func (r *Resolver) ResolveAuthoritative(ctx context.Context, qname string, qtype uint16, servers []AuthoritativeServer, opts ResolveOptions) (ResolveResult, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	if opts.Fanout == "" {
 		opts.Fanout = FanoutFirstResponse
 	}
@@ -116,6 +118,7 @@ func (r *Resolver) ResolveAuthoritative(ctx context.Context, qname string, qtype
 		opts.Consistency = ConsistencyIgnore
 	}
 	servers = filterAuthoritativeServersByCapabilities(servers, r.familyCapabilities(ctx))
+	servers = orderAuthoritativeServersByHealth(ctx, servers)
 	cacheKey := resolveCacheKey(dns.Fqdn(qname), qtype, servers, opts)
 	r.mu.Lock()
 	if cached, ok := r.resolveCache[cacheKey]; ok {
@@ -146,9 +149,15 @@ func (r *Resolver) ResolveAuthoritative(ctx context.Context, qname string, qtype
 		}
 		res, err := resolveExchangeFn(ctx, server.Endpoint, qname, qtype, true)
 		if err != nil {
+			if tracker, ok := endpointHealthTrackerFromContext(ctx); ok {
+				tracker.recordFailure(server.Endpoint, err)
+			}
 			endpoint.Error = err.Error()
 			result.Responses = append(result.Responses, endpoint)
 			continue
+		}
+		if tracker, ok := endpointHealthTrackerFromContext(ctx); ok {
+			tracker.recordSuccess(server.Endpoint, res.RTT)
 		}
 		endpoint.Network = res.Network
 		endpoint.RTT = res.RTT

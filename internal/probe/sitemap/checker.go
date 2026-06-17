@@ -10,6 +10,7 @@ import (
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 const (
@@ -202,7 +203,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	if cfg.MaxDepth < 0 || cfg.MaxFiles < 0 || cfg.MaxURLs < 0 {
-		return nil, fmt.Errorf("max-depth, max-files, and max-urls must be non-negative")
+		switch {
+		case cfg.MaxDepth < 0:
+			return nil, probecli.ErrInputConstraint(probecli.InputRefMaxDepth, "must be non-negative")
+		case cfg.MaxFiles < 0:
+			return nil, probecli.ErrInputConstraint(probecli.InputRefMaxFiles, "must be non-negative")
+		default:
+			return nil, probecli.ErrInputConstraint(probecli.InputRefMaxURLs, "must be non-negative")
+		}
 	}
 
 	client := cfg.HTTPClient

@@ -97,10 +97,38 @@ Current probes:
   - `Lookup(...)`: the small DNS-like API for a single question and a single effective result
   - `Resolve(...)`: a richer execution API that accepts fanout and consistency policy and can return per-endpoint material plus an aggregated result
   - `ResolveAuthoritative(...)`: the execution API for callers that already know the authoritative server set and want the resolver to perform the fanout and consistency work instead of reimplementing it in the probe
-- new resolver features should prefer explicit execution policy objects such as fanout mode and consistency mode over ad-hoc booleans; the resolver is the execution engine, while probes remain the business interpreters of the returned picture
+- new resolver features should prefer explicit execution policy objects such as fanout mode, consistency mode, and glue-acceptance mode over ad-hoc booleans; the resolver is the execution engine, while probes remain the business interpreters of the returned picture
 - when a probe needs a yes/no answer such as "did any authoritative server publish this RRset" or "are all authoritative answers identical", that decision should be expressible through resolver execution options or through neutral assessments returned by the resolver, rather than through duplicated per-probe loops
 - `dnsresolver` caches are intentionally per-resolver and therefore per probe run; they must not survive across runs
 - cache keys must stay specific enough to avoid poisoning neighboring checks: simple lookups key on question, while richer execution results must also key on the authoritative server set and the execution policy such as fanout and consistency mode
+- `dnsresolver` also keeps per-resolver endpoint health memory such as observed success, timeout, and RTT trends; that state is execution-local, affects upstream ordering, and must not leak across probe runs
+- default resolver execution policy should stay laboratory-friendly unless a probe explicitly requests stricter behavior: partial or out-of-bailiwick additional-address material may still be used as hints, while missing or suspect glue should trigger best-effort completion of the remaining `NS` targets instead of short-circuiting the delegation walk
+
+Candidate probe directions:
+
+- `oidc`: OIDC discovery and issuer metadata checker; likely scope includes `/.well-known/openid-configuration` reachability, issuer-self-consistency, endpoint presence, JWKS publication, and TLS or DNS-backed prerequisites where they materially affect identity bootstrap
+- `dane`: DANE policy checker for HTTP- and SMTP-oriented targets; a separate probe would need a clear value boundary such as protocol-specific DANE policy, MX-target walking, or mail-routing semantics rather than duplicating generic TLSA matching logic that may later live inside a broader TLS or DNS policy family
+- `tls` / `x509`: certificate and transport-security probe family; likely scope includes modern and deprecated handshake policy, certificate identity and expiry, trust-path validation, revocation signals, and multi-endpoint semantic comparison across resolved service addresses
+- `rss` / `atom`: feed discovery and validity checker; likely scope includes feed discovery from HTML and autodiscovery links, format and XML well-formedness, declared metadata consistency, basic HTTP freshness semantics, and publisher-facing issues such as broken entry links or invalid timestamps
+
+Direction rule:
+
+- candidate probes should enter the repository only when they have a clear target contract, a stable operator use case, and a boundary that is not better expressed as an option bundle inside an existing thinner probe
+
+Current resolver-surface refactor plan:
+
+- current state:
+- `dnsresolver` already exposes a small `Lookup(...)` layer plus richer execution layers such as `Resolve(...)` and `ResolveAuthoritative(...)`
+- resolver caches, execution policy, and endpoint-health memory are already per resolver instance and therefore per probe run
+- shared HTTP transport already prefers `dnsresolver` rather than silently depending on the host OS recursive resolver
+- near-term follow-up:
+- keep new resolver features expressed through explicit execution-policy objects such as fanout, consistency, and glue-acceptance mode rather than ad-hoc booleans
+- continue shifting duplicated authoritative fanout and consistency loops out of probes and into neutral resolver assessments or execution options
+- keep the resolver API DNS-shaped: question in, message-like answer out, with richer convenience helpers layered above that boundary
+- add a shared DNS wire-level test harness under `internal/testkit`, so resolver and probe tests can exercise truncation, timeout, `SERVFAIL`, missing glue, non-authoritative replies, and DNSSEC-bogus scenarios against real UDP/TCP packet flow instead of relying only on function stubs
+- deferred follow-up:
+- add an explicit shared resolver short-circuit policy such as `--resolver-mode bundled|system` in the shared resolver or transport layer rather than as probe-local conditionals
+- keep TSIG, SIG(0), and EDNS extensions out of the common path until a concrete protocol need justifies them
 
 For `robots`, keep target and policy semantics explicit:
 
@@ -116,6 +144,28 @@ For DNS-oriented probes, keep target semantics explicit:
 - `--zone` means "analyze this zone cut directly"
 - `-H/--hostname` means "start from this owner name, derive its enclosing zone, validate the zone chain, and then validate owner-level RR presence appropriate for the probe"
 - in `dnschain`, hostname mode checks owner-level `CNAME` / `A` / `AAAA` presence and consistency on the final zone authoritative servers, follows same-zone `CNAME` chains to terminal address data, and does not recurse through foreign-zone `CNAME` targets
+
+For service-oriented probes, keep target semantics explicit:
+
+- `-H/--hostname` means "the service identity and network target hostname"
+- `-p/--port` means "the concrete service port"
+- service-oriented input normalization should prefer a shared contract such as `probecli.ResolveServiceTargetInput(...)` so trimming, missing-input handling, and port-range validation do not drift between probes
+- service-specific policy flags such as transport mode, STARTTLS profile, or OCSP behavior belong above the service-target contract rather than inside it
+
+For multi-address service probes, keep transport fanout separate from semantic coverage:
+
+- resolving both `A` and `AAAA` records is only the candidate-discovery step
+- transport fallback across resolved endpoints is useful but is not equivalent to semantic validation across the whole address set
+- if handshake-derived checks such as PKI, OCSP, CT, DANE, or negotiated-parameter policy are evaluated from only one successful endpoint, the probe should treat that as partial address coverage rather than as full service equivalence
+- semantic comparison across the address set should be explicit about what must match, what may differ harmlessly, and what degrades to `WARNING` versus `CRITICAL`
+
+For shared CLI/runtime modules, prefer domain slices over flat growth:
+
+- `probecli` common/runtime pieces cover shared flags, early errors, and renderer-facing input labels
+- `probecli` DNS pieces cover inputs such as `hostname|zone|owner|rrtype`
+- `probecli` service pieces cover inputs such as `hostname|port` and related reusable validation
+- `probecli` web pieces cover `url`, `robots-url`, `entrypoint`, and similar HTTP-oriented target forms
+- when a flat file starts mixing multiple such slices, split by domain and keep the text-rendering merge at the boundary rather than duplicating labels or semantics in individual probes
 
 For DNSSEC denial handling in `dnschain`, keep the internal model explicit:
 
@@ -257,9 +307,11 @@ Current direction:
 - shared verbosity parsing and clamping live in `internal/core/verbosity`
 - shared target URL normalization and base-site derivation live in `internal/core/targeturl`
 - shared probe CLI helpers for program naming, timeout parsing, CSV parsing, ignored-slug validation, and suppressible-finding list rendering live in `internal/core/probecli`
+- schema-driven probe input registration should prefer `probecli.Parser` plus typed `InputSpec` definitions, so probe apps stop hand-wiring common parsing and can keep validation in reusable `InputRef` terms
 - probe config structs should carry standard toggle state such as help, version, and error-slug listing when that state survives parsing into the app-to-probe contract; app-local booleans for the same common toggles should be treated as transitional drift
 - shared authoritative DNS and DNSSEC lookup helpers live in `internal/core/dnsresolver`
 - shared report structures for staged checks and multi-renderer output live in `internal/core/checkreport`
+- top-level Nagios summary formatting should prefer the shared `checkreport` summary helper so probes keep one headline shape even when they still carry probe-specific perfdata or verbose sections
 - shared renderer-facing check presentation helpers also live in `internal/core/checkreport` when they operate only on the shared report model, for example verbosity-aware hiding of low-level checks and aggregation of repeated success checks
 - shared verbose text rendering skeleton also lives in `internal/core/checkreport`; probes should assemble an ordered section plan from shared and probe-local section writers instead of hand-building the whole detailed output as one monolithic function
 - shared section writers should cover common report families such as findings, suppressed findings, rule checks, report overview, meta, stages, and traces when their formatting already matches across multiple probes
@@ -267,6 +319,20 @@ Current direction:
 - probe apps should aggregate shared and probe-local flags into one help output
 - the intended `internal/app/*` shape is narrow: parse flags, build a help document, dispatch standard toggles, invoke the probe, and hand the result to shared rendering helpers
 - shared options should appear in a stable order in CLI help
+
+Current CLI and report-surface refactor plan:
+
+- current state:
+- `probecli` already owns common flags, parser helpers, typed input specs, shared help rendering, and common toggle dispatch
+- `checkreport` already owns the shared staged report model plus default Nagios summary, detail, JSON, and perfdata helpers
+- mature probes already converge on the narrow app-layer shape of parse, toggle dispatch, run, and shared rendering
+- near-term follow-up:
+- keep migrating remaining probe-local app glue onto schema-driven `probecli` registration and shared runtime helpers
+- keep shrinking probe-local renderers toward section adapters over the shared `checkreport` model rather than full custom detail builders
+- keep common toggle state in probe configs only where it survives parsing into the app-to-probe contract; duplicate app-local booleans remain transitional drift and should be removed when touched
+- deferred follow-up:
+- extend shared report entities with stable message-key fields and message parameters so renderers and JSON consumers can use machine-readable text provenance
+- continue normalizing shared section families, aggregation hints, and verbosity behavior before adding new probe-local output conventions
 - the default HTTP `User-Agent` should identify the whole tool family, not a single probe binary
 - the default HTTP `User-Agent` should expose only a release tag or `dev`, not branch names or commit hashes
 
@@ -303,6 +369,26 @@ Current message-catalog policy:
 - probe-specific narrative text, ad-hoc trace prose, and still-evolving verbose sections may remain local until that probe is otherwise being adapted
 - raw user-facing prose should not be cemented into new semantic registries when a stable message key would better express intent
 - external catalog formats are out of scope for now; if the Go-native prototype proves too restrictive later, the data source can change without changing the key and variant contract
+
+Current message-layer refactor plan:
+
+- current state:
+- `internal/core/msgcatalog` is already the shared catalog layer for stable message keys and small variants such as `summary`, `detail`, `title`, and `hint`
+- distributed component sources such as `common`, `dnschain`, `robots`, and `sitemap` are already merged into the default catalog
+- findings already use those rails for default summary copy through stable namespaced slugs
+- some shared help text and renderer labels already use those rails as well
+- near-term scope:
+- extend shared report entities such as findings and checks so they can carry `message_key` plus flat message parameters alongside rendered text
+- migrate shared runtime and CLI wording first, especially early errors, input validation messages, repeated timeout or transport wording, and shared help fragments
+- migrate shared DNS and HTTP wording next where a second consumer already exists, for example authoritative RR presence summaries, matcher summaries, and repeated lookup or transport diagnostics
+- keep business semantics in code and keep the catalog focused on rendering; analyzers compute meaning first and only then select a message key plus parameters
+- probe migration order:
+- `dnschain` is the first probe-level consumer because it already sits closest to the shared staged-report contract
+- `robots` and `sitemap` remain later consumers because their detail and verbose output still carry more probe-local semantics inherited from the pre-framework phase
+- deferred follow-up:
+- expose `message_key`, message parameters, and rendered text together in JSON once the shared report contract is ready for that expansion
+- review which `robots` and `sitemap` verbose/detail sections can move onto shared section families and which should stay probe-local adapters with an explicit contract
+- keep i18n and external catalog formats out of the immediate refactor; the current target is a stable Go-native message contract rather than a data-source migration
 
 Current renderer policy:
 
@@ -350,6 +436,18 @@ Implementation rule:
 - generic naming helpers live in `internal/core/probemeta`
 - probe-local metadata lives near the probe, e.g. `internal/probe/example/meta.go`
 - CLI help, version output, and later packaging helpers should read from probe metadata instead of duplicating names
+
+Current probe-identity and packaging-surface refactor plan:
+
+- current state:
+- probe identity already centers on a stable slug plus probe-local metadata
+- local binary names, installed binary names, and Debian package names already follow one derived naming family rather than ad-hoc per-probe spellings
+- packaging metadata refresh already flows through probe discovery and packaging catalog helpers
+- near-term follow-up:
+- keep CLI help, version output, package manifests, and install/docs generation reading from probe metadata rather than duplicating probe names in multiple surfaces
+- keep packaging builds emitting final installed binary names directly instead of relying on hidden rename steps later in the pipeline
+- deferred follow-up:
+- keep packaging-specific customizations additive around the generic build and metadata path rather than introducing probe-local naming rules or packaging-only identity forks
 
 ## Packaging Direction
 
@@ -437,7 +535,8 @@ Tests should prefer local and deterministic coverage:
 For HTTP-heavy probes, both styles are useful:
 
 - mock transport tests for precise error classification and summary/detail assertions
-- opt-in live tests with a lightweight local HTTP server for redirects, headers, and parser behavior under real `net/http`
+- opt-in integration tests with a lightweight local HTTP server for redirects, headers, and parser behavior under real `net/http`
+- separate opt-in live-network tests only for explicit external regression corpora whose flakiness and target stability are understood
 
 Each new probe should reserve a place for:
 
@@ -448,7 +547,14 @@ Each new probe should reserve a place for:
 - redirect-chain cases for discovery paths that depend on `net/http` behavior
 - explicit text sitemap cases for UTF-8, escaping, and scope rules
 
-The root `Makefile` may expose a separate target for opt-in integration suites, such as `test-live`, when those tests require a local listener and are not safe in every sandboxed environment.
+The root `Makefile` may expose separate targets for opt-in local integration suites such as `test-integration` and external live-network suites such as `test-live`, when those tests are not appropriate for the default no-network path.
+
+Minimal Go code-quality gates should stay pragmatic:
+
+- `gofmt` is mandatory and stays separate from semantic linting
+- `go vet` is the baseline repository-wide lint pass
+- `staticcheck` is recommended when available because it catches real Go issues with low stylistic noise
+- repository lint should not depend on a large style-policy bundle unless a concrete CI need justifies the extra churn
 
 ## CLI Philosophy
 
@@ -538,9 +644,31 @@ Keep public and developer-facing documentation separate:
 
 When adding a new probe, update both only where it changes repository-level understanding. Detailed probe behavior belongs near the probe code or in probe-specific docs later.
 
-Current technical debt in this area:
+Current refactor plans in this area:
 
-- Go `//go:embed` cannot consume canonical files directly from `external/` when they live outside the embedding package tree.
-- Some probes therefore keep package-local `embeddata/` copies as derived build shims.
-- Treat those copies as disposable packaging artifacts, not as a second source-of-truth.
-- The repository should eventually grow a small lifecycle manager or sync helper that refreshes derived `embeddata/` trees from canonical files under `external/`.
+- external-artifact embedding plan:
+- Go `//go:embed` cannot consume canonical files directly from `external/` when they live outside the embedding package tree
+- some probes therefore keep package-local `embeddata/` copies as derived build shims
+- those copies are disposable build artifacts rather than a second source-of-truth
+- near-term follow-up:
+- keep probe-local `embeddata/` trees mechanically derived and reviewable
+- avoid moving canonical source material out of `external/` merely to satisfy `//go:embed`
+- deferred follow-up:
+- add a small lifecycle manager or sync helper that refreshes derived `embeddata/` trees from canonical files under `external/`
+
+- renderer-semantics normalization plan:
+- `robots` and `sitemap` already share the top-level CLI/runtime and summary contract with the shared probe framework
+- their remaining drift lives in probe-local detail-section semantics and stage-specific output shaping inherited from the pre-framework phase
+- near-term follow-up:
+- review which parts of `robots` and `sitemap` verbose and JSON semantics can move onto shared `checkreport` section families
+- keep genuinely probe-specific parsed-content adapters local, but describe them through an explicit contract rather than letting them drift implicitly
+
+- test-taxonomy and testkit plan:
+- the repository now distinguishes ordinary unit tests, deterministic local integration tests, and explicit live-network regressions
+- probe app tests already share a minimal stdout-capture helper
+- near-term follow-up:
+- keep naming and build-tag semantics aligned across probes so `integration` means deterministic local listener or httptest coverage and `live` means external-network regression
+- add a reusable DNS authoritative test harness in `internal/testkit` so DNS transport, referral, and DNSSEC error cases can be covered through real wire exchanges and shared between `dnsresolver`, `dnschain`, and future DNS-backed probes
+- deferred follow-up:
+- grow broader shared testkit layers for HTTP, TLS, and DNS harness builders
+- add shared corpus runners and stable golden-output orchestration where multiple probes would benefit

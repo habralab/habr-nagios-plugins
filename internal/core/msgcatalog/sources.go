@@ -2,7 +2,6 @@ package msgcatalog
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -43,10 +42,4 @@ func hasAllowedPrefix(key Key, prefixes []string) bool {
 		}
 	}
 	return false
-}
-
-func sortedPrefixes(prefixes []string) []string {
-	cloned := append([]string(nil), prefixes...)
-	slices.Sort(cloned)
-	return cloned
 }

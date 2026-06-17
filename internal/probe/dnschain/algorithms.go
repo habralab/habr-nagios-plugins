@@ -238,11 +238,6 @@ func assessCryptoPolicy(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dns.RRS
 	}
 }
 
-func verifiedSEPKeys(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dns.RRSIG, now time.Time) ([]*dns.DNSKEY, []uint8) {
-	keysOnly, _, unsupported := verifiedSEPMaterial(dsRecords, keys, sigs, now)
-	return keysOnly, unsupported
-}
-
 func verifiedSEPMaterial(dsRecords []*dns.DS, keys []*dns.DNSKEY, sigs []*dns.RRSIG, now time.Time) ([]*dns.DNSKEY, []*dns.DS, []uint8) {
 	verified := map[uint16]*dns.DNSKEY{}
 	activeDS := map[string]*dns.DS{}

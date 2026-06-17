@@ -77,6 +77,9 @@ func detachedResolverContext(ctx context.Context) (context.Context, context.Canc
 	if cache, ok := hostAddressCacheFromContext(ctx); ok {
 		base = withHostAddressCache(base, cache)
 	}
+	if tracker, ok := endpointHealthTrackerFromContext(ctx); ok {
+		base = withEndpointHealthTracker(base, tracker)
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		return context.WithDeadline(base, deadline)
 	}

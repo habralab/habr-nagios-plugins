@@ -91,15 +91,6 @@ func childText(el Element, namespace, local string) string {
 	return ""
 }
 
-func hasChild(el Element, namespace, local string) bool {
-	for _, child := range el.Children {
-		if child.Name.Space == namespace && child.Name.Local == local {
-			return true
-		}
-	}
-	return false
-}
-
 func isAbsoluteHTTPURL(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {

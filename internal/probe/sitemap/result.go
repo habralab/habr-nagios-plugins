@@ -16,11 +16,7 @@ func (r *Result) ExitCode() int {
 
 func (r *Result) Summary() string {
 	report := r.reportView()
-	return fmt.Sprintf("%s - %s | %s",
-		report.NagiosLabel(),
-		report.Summary,
-		r.summaryPerfdata(report.Partial),
-	)
+	return checkreport.ResultSummaryWithPerfdata(report, r.summaryPerfdata(report.Partial))
 }
 
 func (r *Result) Detail() string {
@@ -206,19 +202,6 @@ func (r *Result) maxSeverity() Severity {
 		}
 	}
 	return max
-}
-
-func statusLabel(exitCode int) string {
-	switch exitCode {
-	case ExitWarning:
-		return "WARNING"
-	case ExitCritical:
-		return "CRITICAL"
-	case ExitUnknown:
-		return "UNKNOWN"
-	default:
-		return "OK"
-	}
 }
 
 func (r *Result) primaryProblem() Problem {

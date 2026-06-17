@@ -229,26 +229,26 @@ func appendUnique(items []string, item string) []string {
 
 func validateCleanParamValue(value string) error {
 	if value == "" {
-		return fmt.Errorf("Clean-param value is empty")
+		return fmt.Errorf("clean-param value is empty")
 	}
 	if len(value) > 500 {
-		return fmt.Errorf("Clean-param value exceeds 500 characters")
+		return fmt.Errorf("clean-param value exceeds 500 characters")
 	}
 	fields := strings.Fields(value)
 	if len(fields) == 0 || len(fields) > 2 {
-		return fmt.Errorf("Clean-param value %q must use PARAM[&PARAM...] [PATH] form", value)
+		return fmt.Errorf("clean-param value %q must use PARAM[&PARAM...] [PATH] form", value)
 	}
 	paramSpec := strings.Trim(strings.TrimSpace(fields[0]), "&")
 	if paramSpec == "" {
-		return fmt.Errorf("Clean-param value %q contains no parameter names", value)
+		return fmt.Errorf("clean-param value %q contains no parameter names", value)
 	}
 	for _, param := range strings.Split(paramSpec, "&") {
 		if strings.TrimSpace(param) == "" {
-			return fmt.Errorf("Clean-param value %q contains an empty parameter name", value)
+			return fmt.Errorf("clean-param value %q contains an empty parameter name", value)
 		}
 	}
 	if len(fields) == 2 && !strings.HasPrefix(fields[1], "/") {
-		return fmt.Errorf("Clean-param path %q must start with \"/\"", fields[1])
+		return fmt.Errorf("clean-param path %q must start with \"/\"", fields[1])
 	}
 	return nil
 }

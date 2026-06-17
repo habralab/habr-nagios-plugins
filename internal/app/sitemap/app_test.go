@@ -1,16 +1,14 @@
 package sitemapapp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/sitemap"
+	"github.com/habralab/habr-nagios-plugins/internal/testkit/apptest"
 )
 
 const testProgramName = "check_sitemap"
@@ -154,15 +152,22 @@ func TestParseFlagsStoresOverlappingTargetInputs(t *testing.T) {
 
 func TestParseFlagsRejectsInvalidFallbackStatus(t *testing.T) {
 	_, err := parseFlags(testProgramName, []string{"-H", "example.com", "--fallback-status", "critical"})
-	if err == nil || !strings.Contains(err.Error(), "fallback-status must be one of: ok, warn") {
+	if err == nil || !strings.Contains(err.Error(), `invalid --fallback-status "critical": want ok|warn`) {
 		t.Fatalf("parseFlags() error = %v, want invalid fallback status error", err)
 	}
 }
 
 func TestParseFlagsRejectsInvalidFallbackPath(t *testing.T) {
 	_, err := parseFlags(testProgramName, []string{"-H", "example.com", "--fallback-paths", "sitemap.xml,/sitemap.xml"})
-	if err == nil || !strings.Contains(err.Error(), "fallback paths must start with /") {
+	if err == nil || !strings.Contains(err.Error(), "--fallback-paths must start with /") {
 		t.Fatalf("parseFlags() error = %v, want invalid fallback path error", err)
+	}
+}
+
+func TestParseFlagsRejectsNegativeLimits(t *testing.T) {
+	_, err := parseFlags(testProgramName, []string{"-H", "example.com", "--max-depth", "-1"})
+	if err == nil || !strings.Contains(err.Error(), "--max-depth must be >= 0") {
+		t.Fatalf("parseFlags() error = %v, want invalid max-depth error", err)
 	}
 }
 
@@ -282,7 +287,7 @@ func TestRunRejectsInvalidFallbackStatus(t *testing.T) {
 	if exitCode != 3 {
 		t.Fatalf("Run() exitCode = %d, want 3", exitCode)
 	}
-	if !strings.Contains(output, "UNKNOWN - fallback-status must be one of: ok, warn") {
+	if !strings.Contains(output, `UNKNOWN - invalid --fallback-status "critical": want ok|warn`) {
 		t.Fatalf("Run() output = %q, want fallback-status error", output)
 	}
 }
@@ -296,7 +301,7 @@ func TestRunRejectsInvalidFallbackStatusAsJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &report); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
 	}
-	if !strings.Contains(report.Summary, "fallback-status must be one of: ok, warn") {
+	if !strings.Contains(report.Summary, `invalid --fallback-status "critical": want ok|warn`) {
 		t.Fatalf("report.Summary = %q, want fallback-status error", report.Summary)
 	}
 }
@@ -313,22 +318,7 @@ func TestRunVersionPrintsBinaryNameAndMetadata(t *testing.T) {
 
 func runWithCapturedStdout(t *testing.T, programName string, args []string) (int, string) {
 	t.Helper()
-
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	defer r.Close()
-	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
-
-	exitCode := Run(programName, args)
-	w.Close()
-
-	var out bytes.Buffer
-	if _, err := io.Copy(&out, r); err != nil {
-		t.Fatalf("io.Copy() error = %v", err)
-	}
-	return exitCode, out.String()
+	return apptest.RunWithCapturedStdout(t, func() int {
+		return Run(programName, args)
+	})
 }

@@ -3,6 +3,7 @@ package dnsresolver
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/miekg/dns"
@@ -35,6 +36,7 @@ func RootTrustAnchorCount() int {
 
 func (r *Resolver) DiscoverEnclosingZone(ctx context.Context, qname string) (string, []DelegationHopInfo, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	iter, err := r.iterativeFn(withDNSQueryTimeout(ctx, r.QueryTimeout), dns.Fqdn(qname), dns.TypeNS)
 	if err != nil {
 		return "", nil, err
@@ -47,6 +49,7 @@ func (r *Resolver) DiscoverEnclosingZone(ctx context.Context, qname string) (str
 
 func (r *Resolver) ZoneChain(ctx context.Context, zone string) ([]DelegationHopInfo, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	hops, err := buildZoneChain(withDNSQueryTimeout(ctx, r.QueryTimeout), zone)
 	if err != nil {
 		return nil, err
@@ -56,6 +59,7 @@ func (r *Resolver) ZoneChain(ctx context.Context, zone string) ([]DelegationHopI
 
 func (r *Resolver) ProbeRootTrust(ctx context.Context) (RootTrustResult, error) {
 	ctx = withResolverFamilyConstraints(ctx, r.familyCapabilities(ctx))
+	ctx = withEndpointHealthTracker(ctx, r.endpointHealth)
 	now := time.Now().UTC()
 	res, err := queryAny(withDNSQueryTimeout(ctx, r.QueryTimeout), rootHintsAny, ".", dns.TypeDNSKEY, true)
 	if err != nil {
@@ -96,7 +100,7 @@ func exportedDelegationHops(values []delegationHop) []DelegationHopInfo {
 }
 
 func exportedServer(value nsAddr) ServerAddr {
-	return ServerAddr{Name: value.Name, Addr: value.Addr}
+	return ServerAddr(value)
 }
 
 func exportedServers(values []nsAddr) []ServerAddr {
@@ -105,4 +109,38 @@ func exportedServers(values []nsAddr) []ServerAddr {
 		out = append(out, exportedServer(value))
 	}
 	return out
+}
+
+func AuthoritativeServersFromAddrs(values []ServerAddr) []AuthoritativeServer {
+	out := make([]AuthoritativeServer, 0, len(values))
+	for _, value := range values {
+		out = append(out, AuthoritativeServer{Name: value.Name, Endpoint: value.Addr})
+	}
+	return UniqueAuthoritativeServers(out)
+}
+
+func UniqueAuthoritativeServers(values []AuthoritativeServer) []AuthoritativeServer {
+	return uniqueAuthoritativeServers(values)
+}
+
+func (r *Resolver) ResolveHostEndpoints(ctx context.Context, host string) ([]AuthoritativeServer, error) {
+	var out []AuthoritativeServer
+	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+		lookup, err := r.Lookup(ctx, host, qtype)
+		if err != nil {
+			continue
+		}
+		for _, rr := range lookup.Records {
+			switch v := rr.(type) {
+			case *dns.A:
+				out = append(out, AuthoritativeServer{Name: dns.Fqdn(host), Endpoint: net.JoinHostPort(v.A.String(), "53")})
+			case *dns.AAAA:
+				out = append(out, AuthoritativeServer{Name: dns.Fqdn(host), Endpoint: net.JoinHostPort(v.AAAA.String(), "53")})
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no A or AAAA records were found")
+	}
+	return UniqueAuthoritativeServers(out), nil
 }

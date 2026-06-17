@@ -25,10 +25,12 @@ func TestMissingNSNames(t *testing.T) {
 	}
 }
 
-func TestCompleteReferralServersUsesGlueWithoutResolvingRemainder(t *testing.T) {
+func TestCompleteReferralServersUsesGlueAndResolvesMissingRemainder(t *testing.T) {
 	resolver := func(_ context.Context, names []string) ([]nsAddr, error) {
-		t.Fatalf("resolver should not be called when glue is already available, got %v", names)
-		return nil, nil
+		if len(names) != 1 || names[0] != "ns3.example.net." {
+			t.Fatalf("resolver names = %#v, want only missing name", names)
+		}
+		return []nsAddr{{Name: "ns3.example.net.", Addr: "192.0.2.3:53"}}, nil
 	}
 
 	got, err := completeReferralServersWithResolver(context.Background(),
@@ -39,12 +41,13 @@ func TestCompleteReferralServersUsesGlueWithoutResolvingRemainder(t *testing.T) 
 			{Name: "ns2.example.net.", Addr: "192.0.2.2:53"},
 		},
 		resolver,
+		defaultExecutionPolicy(),
 	)
 	if err != nil {
 		t.Fatalf("completeReferralServersWithResolver() error = %v", err)
 	}
-	if gotLen := len(got); gotLen != 2 {
-		t.Fatalf("completeReferralServersWithResolver() len = %d, want 2", gotLen)
+	if gotLen := len(got); gotLen != 3 {
+		t.Fatalf("completeReferralServersWithResolver() len = %d, want 3", gotLen)
 	}
 }
 
@@ -61,6 +64,7 @@ func TestCompleteReferralServersResolvesOutOfBailiwickNamesWhenGlueIsAbsent(t *t
 		[]string{"ns3.example.net."},
 		nil,
 		resolver,
+		defaultExecutionPolicy(),
 	)
 	if err != nil {
 		t.Fatalf("completeReferralServersWithResolver() error = %v", err)
@@ -83,6 +87,7 @@ func TestCompleteReferralServersSkipsInBailiwickNamesWithoutGlue(t *testing.T) {
 		[]string{"dns1.easydns.com.", "dns2.easydns.net."},
 		nil,
 		resolver,
+		defaultExecutionPolicy(),
 	)
 	if err != nil {
 		t.Fatalf("completeReferralServersWithResolver() error = %v", err)
@@ -103,12 +108,36 @@ func TestCompleteReferralServersFailsWhenOnlyInBailiwickNamesLackGlue(t *testing
 		[]string{"ns1.example.com.", "ns2.example.com."},
 		nil,
 		resolver,
+		defaultExecutionPolicy(),
 	)
 	if err == nil {
 		t.Fatal("completeReferralServersWithResolver() error = nil, want glue/bootstrap error")
 	}
 	if !strings.Contains(err.Error(), "missing glue for in-bailiwick name servers") {
 		t.Fatalf("error = %q, want missing glue message", err)
+	}
+}
+
+func TestAcceptedGlueAddrsPolicy(t *testing.T) {
+	nsNames := []string{"ns1.example.com.", "ns2.example.net."}
+	glue := []nsAddr{
+		{Name: "ns1.example.com.", Addr: "192.0.2.1:53"},
+		{Name: "ns2.example.net.", Addr: "192.0.2.2:53"},
+	}
+
+	gotStrict := acceptedGlueAddrs("example.com.", nsNames, glue, glueAcceptanceStrict)
+	if len(gotStrict) != 1 || gotStrict[0].Name != "ns1.example.com." {
+		t.Fatalf("strict accepted glue = %#v, want only in-bailiwick glue", gotStrict)
+	}
+
+	gotNormal := acceptedGlueAddrs("example.com.", nsNames, glue, glueAcceptanceNormal)
+	if len(gotNormal) != 1 || gotNormal[0].Name != "ns1.example.com." {
+		t.Fatalf("normal accepted glue = %#v, want only in-bailiwick glue", gotNormal)
+	}
+
+	gotPermissive := acceptedGlueAddrs("example.com.", nsNames, glue, glueAcceptancePermissive)
+	if len(gotPermissive) != 2 {
+		t.Fatalf("permissive accepted glue len = %d, want 2 (%#v)", len(gotPermissive), gotPermissive)
 	}
 }
 
@@ -189,6 +218,64 @@ func TestBuildZoneChainWithResolverHandlesAuthoritativeAnswerDelegation(t *testi
 	}
 	if len(hops[0].ChildServers) != 1 || hops[0].ChildServers[0].Addr != comServer.Addr {
 		t.Fatalf("first hop child servers = %#v, want %#v", hops[0].ChildServers, []nsAddr{comServer})
+	}
+	if len(hops[1].ChildServers) != 1 || hops[1].ChildServers[0].Addr != exampleServer.Addr {
+		t.Fatalf("second hop child servers = %#v, want %#v", hops[1].ChildServers, []nsAddr{exampleServer})
+	}
+}
+
+func TestBuildZoneChainWithResolverUsesBestEffortResolverSemantics(t *testing.T) {
+	rootServer := nsAddr{Name: "a.root-servers.net.", Addr: "198.41.0.4:53"}
+	comServer := nsAddr{Name: "a.gtld-servers.net.", Addr: "192.0.2.10:53"}
+	exampleServer := nsAddr{Name: "ns2.example.net.", Addr: "192.0.2.21:53"}
+
+	query := func(_ context.Context, servers []nsAddr, qname string, qtype uint16, do bool) (*exchangeResult, error) {
+		if qtype != dns.TypeNS || !do {
+			t.Fatalf("unexpected query type/do: %d %t", qtype, do)
+		}
+		switch dns.Fqdn(qname) {
+		case "com.":
+			return &exchangeResult{
+				Server: rootServer,
+				Msg: &dns.Msg{
+					MsgHdr: dns.MsgHdr{Authoritative: true},
+					Answer: []dns.RR{
+						&dns.NS{Hdr: dns.RR_Header{Name: "com.", Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 172800}, Ns: "a.gtld-servers.net."},
+					},
+					Extra: []dns.RR{
+						&dns.A{Hdr: dns.RR_Header{Name: "a.gtld-servers.net.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 172800}, A: net.IPv4(192, 0, 2, 10)},
+					},
+				},
+			}, nil
+		case "example.com.":
+			return &exchangeResult{
+				Server: comServer,
+				Msg: &dns.Msg{
+					Ns: []dns.RR{
+						&dns.NS{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 172800}, Ns: "ns1.example.net."},
+						&dns.NS{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 172800}, Ns: "ns2.example.net."},
+					},
+				},
+			}, nil
+		default:
+			t.Fatalf("unexpected qname %q", qname)
+			return nil, nil
+		}
+	}
+
+	resolver := func(_ context.Context, names []string) ([]nsAddr, error) {
+		if len(names) != 2 {
+			t.Fatalf("resolver names = %#v, want both out-of-bailiwick names", names)
+		}
+		return []nsAddr{{Name: "ns2.example.net.", Addr: exampleServer.Addr}}, nil
+	}
+
+	hops, err := buildZoneChainWithResolver(context.Background(), "example.com.", query, resolver)
+	if err != nil {
+		t.Fatalf("buildZoneChainWithResolver() error = %v", err)
+	}
+	if len(hops) != 2 {
+		t.Fatalf("buildZoneChainWithResolver() len = %d, want 2", len(hops))
 	}
 	if len(hops[1].ChildServers) != 1 || hops[1].ChildServers[0].Addr != exampleServer.Addr {
 		t.Fatalf("second hop child servers = %#v, want %#v", hops[1].ChildServers, []nsAddr{exampleServer})

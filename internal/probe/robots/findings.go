@@ -1,7 +1,6 @@
 package robots
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/finding"
@@ -141,14 +140,5 @@ func FindingCatalogToEntries(catalog map[string]FindingSpec) map[string]rulecata
 			Message:  msgcatalog.DefaultSummaryOrKey(spec.Slug),
 		}
 	}
-	return out
-}
-
-func sortedCatalogSlugs() []string {
-	out := make([]string, 0, len(FindingCatalog))
-	for slug := range FindingCatalog {
-		out = append(out, slug)
-	}
-	sort.Strings(out)
 	return out
 }

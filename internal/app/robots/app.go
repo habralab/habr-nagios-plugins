@@ -1,95 +1,70 @@
 package robotsapp
 
 import (
-	"context"
 	"fmt"
-	"github.com/habralab/habr-nagios-plugins/internal/core/clihelp"
+	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/robots"
 	"strings"
+	"time"
 )
 
 var robotsRun = robots.Run
 
 func Run(programName string, args []string) int {
-	binName := probecli.EffectiveProgramName(programName, robots.Meta.DefaultBinaryName())
-	requestedOutputMode := probecli.DetectOutputMode(args)
-
-	cfg, err := parseFlags(binName, args)
-	if err != nil {
-		fmt.Print(probecli.RenderEarlyError(robots.Meta.Slug, "", requestedOutputMode, err))
-		return robots.ExitUnknown
-	}
-
-	if output, exitCode, handled := probecli.DispatchToggleActions(
-		probecli.VersionAction(binName, cfg.ShowVersion, robots.ExitOK),
-		probecli.ToggleAction{Enabled: cfg.ShowErrorSlugs, Output: probecli.RenderErrorSlugDescriptors(robots.CatalogEntries()), ExitCode: robots.ExitOK},
-		probecli.ToggleAction{Enabled: cfg.ShowKnownDirectives, Output: renderKnownDirectives(), ExitCode: robots.ExitOK},
-		probecli.ToggleAction{Enabled: cfg.ShowKnownAgents, Output: renderKnownAgents(), ExitCode: robots.ExitOK},
-		probecli.ToggleAction{Enabled: cfg.ShowKnownAgentBehaviors, Output: renderKnownAgentBehaviors(), ExitCode: robots.ExitOK},
-		probecli.ToggleAction{Enabled: cfg.ShowHelp, Output: renderHelp(binName), ExitCode: robots.ExitOK},
-	); handled {
-		fmt.Print(output)
-		return exitCode
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-	defer cancel()
-
-	result, err := robotsRun(ctx, cfg)
-	if err != nil {
-		fmt.Print(probecli.RenderEarlyError(robots.Meta.Slug, "", cfg.OutputMode, err))
-		return robots.ExitUnknown
-	}
-
-	rendered, exitCode, err := probecli.RenderResult(result, cfg.OutputMode, cfg.Verbosity)
-	if err != nil {
-		fmt.Printf("UNKNOWN - %v\n", err)
-		return robots.ExitUnknown
-	}
-	fmt.Print(rendered)
-	return exitCode
+	return probecli.RunApp(probecli.AppSpec[robots.Config, *robots.Result]{
+		ProgramName:       programName,
+		Args:              args,
+		Probe:             robots.Meta.Slug,
+		DefaultBinaryName: robots.Meta.DefaultBinaryName(),
+		Parse:             parseFlags,
+		BuildToggles: func(binName string, cfg robots.Config) []probecli.ToggleAction {
+			return []probecli.ToggleAction{
+				probecli.VersionAction(binName, cfg.ShowVersion, robots.ExitOK),
+				{Enabled: cfg.ShowErrorSlugs, Output: probecli.RenderErrorSlugDescriptors(robots.CatalogEntries()), ExitCode: robots.ExitOK},
+				{Enabled: cfg.ShowKnownDirectives, Output: renderKnownDirectives(), ExitCode: robots.ExitOK},
+				{Enabled: cfg.ShowKnownAgents, Output: renderKnownAgents(), ExitCode: robots.ExitOK},
+				{Enabled: cfg.ShowKnownAgentBehaviors, Output: renderKnownAgentBehaviors(), ExitCode: robots.ExitOK},
+				{Enabled: cfg.ShowHelp, Output: renderHelp(binName), ExitCode: robots.ExitOK},
+			}
+		},
+		Timeout:         func(cfg robots.Config) time.Duration { return cfg.Timeout },
+		Run:             robotsRun,
+		UnknownExitCode: robots.ExitUnknown,
+		OutputMode:      func(cfg robots.Config) checkreport.OutputMode { return cfg.OutputMode },
+		Verbosity:       func(cfg robots.Config) int { return cfg.Verbosity },
+	})
 }
 
 func parseFlags(binName string, args []string) (robots.Config, error) {
-	fs, common, err := probecli.NewCommonFlagSet(binName, args)
+	parser, err := probecli.NewParser(binName, args)
 	if err != nil {
 		return robots.Config{}, err
 	}
 
 	cfg := robots.DefaultConfig()
-	var requireUserAgents string
-	var requireDisallows string
-	var forbidDisallows string
-	var behaviorProfile string
-
-	fs.StringVar(&cfg.Hostname, "H", "", "hostname used for discovery, e.g. example.com")
-	fs.StringVar(&cfg.Hostname, "hostname", "", "hostname used for discovery, e.g. example.com")
-	fs.StringVar(&cfg.URL, "u", "", "full base URL used for discovery, e.g. https://example.com")
-	fs.StringVar(&cfg.URL, "url", "", "full base URL used for discovery, e.g. https://example.com")
-	fs.StringVar(&cfg.RobotsURL, "robots-url", "", "explicit robots.txt URL")
-	fs.BoolVar(&cfg.Strict, "strict", false, "enable stricter policy interpretation")
-	fs.StringVar(&behaviorProfile, "behavior-profile", string(robots.BehaviorProfileRFC), "documented crawler behavior profile: rfc, vendor-aware, strict")
-	fs.BoolVar(&cfg.RequireSitemap, "require-sitemap", false, "require at least one Sitemap directive")
-	fs.StringVar(&requireUserAgents, "require-user-agent", "", "comma-separated User-agent values that must exist")
-	fs.StringVar(&requireDisallows, "require-disallow", "", "comma-separated Disallow values that must exist")
-	fs.StringVar(&forbidDisallows, "forbid-disallow", "", "comma-separated Disallow values that must not exist")
-	fs.StringVar(&cfg.HTTP.UserAgent, "user-agent", httpx.DefaultUserAgent(), "HTTP User-Agent")
-	fs.BoolVar(&cfg.HTTP.InsecureSkipVerify, "insecure-skip-verify", false, "disable TLS certificate verification for HTTP requests")
-	common.Register(fs, "30s")
-	fs.BoolVar(&cfg.ShowKnownDirectives, "list-known-directives", false, "list built-in known robots.txt directives and exit")
-	fs.BoolVar(&cfg.ShowKnownAgents, "list-known-agents", false, "list built-in known crawler and AI agent tokens and exit")
-	fs.BoolVar(&cfg.ShowKnownAgentBehaviors, "list-agent-behaviors", false, "list built-in documented crawler behavior claims and exit")
-
-	if err := fs.Parse(common.Args()); err != nil {
-		return robots.Config{}, err
-	}
-
-	resolved, err := common.Resolve(robots.CatalogHasSlug)
+	parser.RegisterCommon("30s")
+	specs := robotsInputSpecs(cfg)
+	err = parser.RegisterInputs(specs...)
 	if err != nil {
 		return robots.Config{}, err
 	}
+
+	resolved, inputs, err := parser.Parse(robots.CatalogHasSlug, nil)
+	if err != nil {
+		return robots.Config{}, err
+	}
+	cfg.Hostname = inputs.String("hostname")
+	cfg.URL = inputs.String("url")
+	cfg.RobotsURL = inputs.String("robots_url")
+	cfg.Strict = inputs.Bool("strict")
+	cfg.RequireSitemap = inputs.Bool("require_sitemap")
+	cfg.RequireUserAgents = probecli.DecodeCSVInput(inputs, "require_user_agent")
+	cfg.RequireDisallows = probecli.DecodeCSVInput(inputs, "require_disallow")
+	cfg.ForbidDisallows = probecli.DecodeCSVInput(inputs, "forbid_disallow")
+	cfg.HTTP.UserAgent = inputs.String("user_agent")
+	cfg.HTTP.InsecureSkipVerify = inputs.Bool("insecure_skip_verify")
 	cfg.Timeout = resolved.Timeout
 	cfg.Verbosity = resolved.Verbosity
 	cfg.OutputMode = resolved.OutputMode
@@ -98,19 +73,153 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	cfg.ShowHelp = resolved.ShowHelp
 	cfg.ShowVersion = resolved.ShowVersion
 	cfg.ShowErrorSlugs = resolved.ShowErrorSlugs
-	cfg.BehaviorProfile, err = parseBehaviorProfile(behaviorProfile)
+	cfg.ShowKnownDirectives = inputs.Bool("list_known_directives")
+	cfg.ShowKnownAgents = inputs.Bool("list_known_agents")
+	cfg.ShowKnownAgentBehaviors = inputs.Bool("list_agent_behaviors")
+	cfg.BehaviorProfile, err = probecli.DecodeEnumInput(
+		inputs,
+		"behavior_profile",
+		probecli.InputRefBehavior,
+		[]string{"rfc", "vendor-aware", "strict"},
+		parseBehaviorProfile,
+	)
 	if err != nil {
 		return robots.Config{}, err
 	}
-	cfg.RequireUserAgents = probecli.SplitCSV(requireUserAgents)
-	cfg.RequireDisallows = probecli.SplitCSV(requireDisallows)
-	cfg.ForbidDisallows = probecli.SplitCSV(forbidDisallows)
+	if !cfg.ShowHelp && !cfg.ShowVersion && !cfg.ShowErrorSlugs && !cfg.ShowKnownDirectives && !cfg.ShowKnownAgents && !cfg.ShowKnownAgentBehaviors {
+		if err := validateInputs(inputs); err != nil {
+			return robots.Config{}, err
+		}
+	}
 
 	return cfg, nil
 }
 
+func robotsInputSpecs(cfg robots.Config) []probecli.InputSpec {
+	return []probecli.InputSpec{
+		probecli.InputSpec{
+			Key:  "hostname",
+			Type: probecli.InputString,
+			Aliases: []probecli.InputAlias{
+				{Short: "H", Usage: "hostname used for discovery, e.g. example.com"},
+				{Long: "hostname", Usage: "hostname used for discovery, e.g. example.com"},
+			},
+			Description: "Hostname used for robots.txt discovery.\nDefault scheme for hostname-based discovery is https.",
+			Examples:    []string{"-H example.com", "-H docs.example.net"},
+		},
+		probecli.InputSpec{
+			Key:         "url",
+			Type:        probecli.InputString,
+			Aliases:     []probecli.InputAlias{{Short: "u", Usage: "full base URL used for discovery, e.g. https://example.com"}, {Long: "url", Usage: "full base URL used for discovery, e.g. https://example.com"}},
+			Description: "Full base URL used for robots.txt discovery.\nWhen both --url and --hostname are provided, --url wins.",
+			Examples:    []string{"-u https://example.com", "-u http://docs.example.net"},
+		},
+		probecli.InputSpec{
+			Key:         "robots_url",
+			Type:        probecli.InputString,
+			Aliases:     []probecli.InputAlias{{Long: "robots-url", Usage: "explicit robots.txt URL"}},
+			Description: "Use an explicit robots.txt URL and skip base URL construction.\nThis is the most direct mode when the file is not located at /robots.txt.",
+			Examples:    []string{"--robots-url https://example.com/robots.txt", "--robots-url https://cdn.example.net/static/robots.txt"},
+		},
+		probecli.InputSpec{
+			Key:         "strict",
+			Type:        probecli.InputBool,
+			Aliases:     []probecli.InputAlias{{Long: "strict", Usage: "enable stricter policy interpretation"}},
+			Description: "Warn when known non-standard extension directives are in use.\nThis is independent from --behavior-profile.",
+		},
+		probecli.InputSpec{
+			Key:         "behavior_profile",
+			Type:        probecli.InputString,
+			Default:     string(robots.BehaviorProfileRFC),
+			Aliases:     []probecli.InputAlias{{Long: "behavior-profile", Usage: "documented crawler behavior profile: rfc, vendor-aware, strict"}},
+			Description: "Apply documented crawler behavior checks.\nrfc: only RFC-oriented transport and syntax validation.\nvendor-aware: also warn when a documented crawler ignores rules or directives present in its group.\nstrict: vendor-aware plus warnings for extension directives whose support is undocumented for a known crawler.\nDefault: rfc.",
+			Examples:    []string{"--behavior-profile vendor-aware", "--behavior-profile strict"},
+		},
+		probecli.InputSpec{
+			Key:         "require_sitemap",
+			Type:        probecli.InputBool,
+			Aliases:     []probecli.InputAlias{{Long: "require-sitemap", Usage: "require at least one Sitemap directive"}},
+			Description: "Require at least one Sitemap directive.\nUse this when robots.txt must advertise sitemap discovery explicitly.",
+		},
+		probecli.InputSpec{
+			Key:         "require_user_agent",
+			Type:        probecli.InputString,
+			Aliases:     []probecli.InputAlias{{Long: "require-user-agent", Usage: "comma-separated User-agent values that must exist"}},
+			Description: "Require one or more User-agent values to exist.\nMatching is done against the literal User-agent tokens present in the file.",
+			Examples:    []string{"--require-user-agent Googlebot,*"},
+		},
+		probecli.InputSpec{
+			Key:         "require_disallow",
+			Type:        probecli.InputString,
+			Aliases:     []probecli.InputAlias{{Long: "require-disallow", Usage: "comma-separated Disallow values that must exist"}},
+			Description: "Require one or more Disallow rules to exist exactly as written.\nMatching is exact and ignores group context.",
+			Examples:    []string{"--require-disallow /admin,/private"},
+		},
+		probecli.InputSpec{
+			Key:         "forbid_disallow",
+			Type:        probecli.InputString,
+			Aliases:     []probecli.InputAlias{{Long: "forbid-disallow", Usage: "comma-separated Disallow values that must not exist"}},
+			Description: "Fail when one or more Disallow rules are present exactly as written.\nMatching is exact and ignores group context.",
+			Examples:    []string{"--forbid-disallow /"},
+		},
+		probecli.InputSpec{
+			Key:         "user_agent",
+			Type:        probecli.InputString,
+			Default:     httpx.DefaultUserAgent(),
+			Aliases:     []probecli.InputAlias{{Long: "user-agent", Usage: "HTTP User-Agent"}},
+			Description: "Override the HTTP User-Agent header sent by the probe's HTTP requests.",
+			Examples:    []string{fmt.Sprintf(`--user-agent "%s"`, httpx.DefaultUserAgent())},
+		},
+		probecli.InputSpec{
+			Key:         "insecure_skip_verify",
+			Type:        probecli.InputBool,
+			Aliases:     []probecli.InputAlias{{Long: "insecure-skip-verify", Usage: "disable TLS certificate verification for HTTP requests"}},
+			Description: "Disable TLS certificate verification for HTTP requests.\nUse only for diagnostics or when you intentionally want to inspect payload behavior behind broken TLS.",
+		},
+		probecli.InputSpec{
+			Key:         "list_known_directives",
+			Type:        probecli.InputBool,
+			Aliases:     []probecli.InputAlias{{Long: "list-known-directives", Usage: "list built-in known robots.txt directives and exit"}},
+			Description: "Print the built-in robots.txt directive registry and exit.\nIncludes core, well-known, vendor, and observed extensions.",
+		},
+		probecli.InputSpec{
+			Key:         "list_known_agents",
+			Type:        probecli.InputBool,
+			Aliases:     []probecli.InputAlias{{Long: "list-known-agents", Usage: "list built-in known crawler and AI agent tokens and exit"}},
+			Description: "Print the built-in crawler and AI agent registry and exit.",
+		},
+		probecli.InputSpec{
+			Key:         "list_agent_behaviors",
+			Type:        probecli.InputBool,
+			Aliases:     []probecli.InputAlias{{Long: "list-agent-behaviors", Usage: "list built-in documented crawler behavior claims and exit"}},
+			Description: "Print the built-in documented crawler behavior matrix and exit.\nUse this to inspect what vendor-aware and strict mode can reason about.",
+		},
+	}
+}
+
+func robotsHelpConfig() probecli.CommonHelpConfig {
+	cfg := probecli.DefaultCommonHelpConfig(
+		"30s",
+		"json emits the structured robots waterfall report for external renderers.",
+		"--ignore-errors robots_content_type_unexpected,robots_invalid_line",
+	)
+	cfg.TimeoutExamples = []string{"-t 30s", "--timeout 120s"}
+	return cfg
+}
+
+func validateInputs(inputs *probecli.Inputs) error {
+	if inputs.String("hostname") == "" && inputs.String("url") == "" && inputs.String("robots_url") == "" {
+		return probecli.ErrInputRequiredAny(
+			probecli.InputRefHostname,
+			probecli.InputRefURL,
+			probecli.InputRefRobotsURL,
+		)
+	}
+	return nil
+}
+
 func renderHelp(binName string) string {
-	doc := clihelp.Document{
+	return probecli.RenderHelpDocument(probecli.HelpDocument{
 		ProgramName: binName,
 		Summary:     robots.Meta.Summary,
 		Usage: []string{
@@ -118,110 +227,9 @@ func renderHelp(binName string) string {
 			binName + " -u https://example.com [options]",
 			binName + " --robots-url https://example.com/robots.txt [options]",
 		},
-	}
-	options := []clihelp.Option{
-		{
-			Short: "-H",
-			Long:  "--hostname",
-			Description: "Hostname used for robots.txt discovery.\n" +
-				"Default scheme for hostname-based discovery is https.",
-			Examples: []string{
-				"-H example.com",
-				"-H docs.example.net",
-			},
-		},
-		{Short: "-h", Long: "--help", Description: probecli.HelpOptionDescription()},
-		{
-			Short: "-u",
-			Long:  "--url",
-			Description: "Full base URL used for robots.txt discovery.\n" +
-				"When both --url and --hostname are provided, --url wins.",
-			Examples: []string{
-				"-u https://example.com",
-				"-u http://docs.example.net",
-			},
-		},
-		{
-			Long: "--robots-url",
-			Description: "Use an explicit robots.txt URL and skip base URL construction.\n" +
-				"This is the most direct mode when the file is not located at /robots.txt.",
-			Examples: []string{
-				"--robots-url https://example.com/robots.txt",
-				"--robots-url https://cdn.example.net/static/robots.txt",
-			},
-		},
-		{
-			Long:        "--output",
-			Description: probecli.OutputModeOptionDescription("json emits the structured robots waterfall report for external renderers."),
-			Examples: []string{
-				"--output nagios",
-				"--output json",
-			},
-		},
-		{
-			Long: "--require-sitemap",
-			Description: "Require at least one Sitemap directive.\n" +
-				"Use this when robots.txt must advertise sitemap discovery explicitly.",
-		},
-		{
-			Long: "--require-user-agent",
-			Description: "Require one or more User-agent values to exist.\n" +
-				"Matching is done against the literal User-agent tokens present in the file.",
-			Examples: []string{
-				"--require-user-agent Googlebot,*",
-			},
-		},
-		{
-			Long: "--require-disallow",
-			Description: "Require one or more Disallow rules to exist exactly as written.\n" +
-				"Matching is exact and ignores group context.",
-			Examples: []string{
-				"--require-disallow /admin,/private",
-			},
-		},
-		{
-			Long: "--forbid-disallow",
-			Description: "Fail when one or more Disallow rules are present exactly as written.\n" +
-				"Matching is exact and ignores group context.",
-			Examples: []string{
-				"--forbid-disallow /",
-			},
-		},
-		{
-			Long:        "--ignore-errors",
-			Description: probecli.IgnoreErrorsOptionDescription(),
-			Examples: []string{
-				"--ignore-errors robots_content_type_unexpected,robots_invalid_line",
-			},
-		},
-		{
-			Long: "--strict",
-			Description: "Warn when known non-standard extension directives are in use.\n" +
-				"This is independent from --behavior-profile.",
-		},
-		{
-			Long: "--behavior-profile",
-			Description: "Apply documented crawler behavior checks.\n" +
-				"rfc: only RFC-oriented transport and syntax validation.\n" +
-				"vendor-aware: also warn when a documented crawler ignores rules or directives present in its group.\n" +
-				"strict: vendor-aware plus warnings for extension directives whose support is undocumented for a known crawler.\n" +
-				"Default: rfc.",
-			Examples: []string{
-				"--behavior-profile vendor-aware",
-				"--behavior-profile strict",
-			},
-		},
-		{Short: "-t", Long: "--timeout", Description: probecli.TimeoutOptionDescription("30s"), Examples: []string{"-t 30s", "--timeout 120s"}},
-		{Short: "-v", Long: "--verbose", Description: probecli.VerboseOptionDescription(), Examples: []string{"-v", "-vv", "-vvv", "--verbose=2"}},
-		{Long: "--list-error-slugs", Description: probecli.ListErrorSlugsOptionDescription()},
-		{Long: "--list-known-directives", Description: "Print the built-in robots.txt directive registry and exit.\nIncludes core, well-known, vendor, and observed extensions."},
-		{Long: "--list-known-agents", Description: "Print the built-in crawler and AI agent registry and exit."},
-		{Long: "--list-agent-behaviors", Description: "Print the built-in documented crawler behavior matrix and exit.\nUse this to inspect what vendor-aware and strict mode can reason about."},
-		{Short: "-V", Long: "--version", Description: probecli.VersionOptionDescription()},
-	}
-	options = append(options, httpx.HelpOptions()...)
-	doc.Options = options
-	return clihelp.RenderDocument(doc)
+		InputOptions: robotsInputSpecs(robots.DefaultConfig()),
+		Common:       robotsHelpConfig(),
+	})
 }
 
 func renderKnownDirectives() string {
@@ -289,6 +297,10 @@ func parseBehaviorProfile(raw string) (robots.BehaviorProfile, error) {
 	case string(robots.BehaviorProfileStrict):
 		return robots.BehaviorProfileStrict, nil
 	default:
-		return "", fmt.Errorf("invalid --behavior-profile %q: want rfc, vendor-aware or strict", raw)
+		return "", probecli.ErrInvalidEnum(
+			probecli.InputRefBehavior,
+			raw,
+			"rfc", "vendor-aware", "strict",
+		)
 	}
 }

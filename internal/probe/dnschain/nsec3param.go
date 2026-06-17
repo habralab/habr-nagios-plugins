@@ -15,16 +15,6 @@ type nsec3ParamAssessment struct {
 	Evidence []checkreport.Evidence
 }
 
-func splitNSEC3PARAMAnswer(rrs []dns.RR, owner string) []*dns.NSEC3PARAM {
-	var params []*dns.NSEC3PARAM
-	for _, rr := range rrs {
-		if v, ok := rr.(*dns.NSEC3PARAM); ok && dns.Fqdn(v.Header().Name) == dns.Fqdn(owner) {
-			params = append(params, v)
-		}
-	}
-	return params
-}
-
 func nsec3ParamSetFingerprint(params []*dns.NSEC3PARAM) string {
 	if len(params) == 0 {
 		return ""

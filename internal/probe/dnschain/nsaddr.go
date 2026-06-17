@@ -39,13 +39,12 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
-func withDNSQueryTimeout(ctx context.Context, timeout time.Duration) context.Context {
+func withDNSQueryTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
-		return ctx
+		return ctx, func() {}
 	}
 	if _, ok := ctx.Deadline(); ok {
-		return ctx
+		return ctx, func() {}
 	}
-	derived, _ := context.WithTimeout(ctx, timeout)
-	return derived
+	return context.WithTimeout(ctx, timeout)
 }

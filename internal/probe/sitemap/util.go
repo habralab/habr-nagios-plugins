@@ -124,13 +124,6 @@ func trustedHostKey(raw string) string {
 	return strings.ToLower(u.Hostname()) + ":" + normalizedPort(u)
 }
 
-func trustedHostKeyFromURL(u *url.URL) string {
-	if u == nil || u.Hostname() == "" {
-		return ""
-	}
-	return strings.ToLower(u.Hostname()) + ":" + normalizedPort(u)
-}
-
 func (r *Result) trustHost(raw string) {
 	if r == nil || r.CrossHostTrust == nil {
 		return

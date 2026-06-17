@@ -157,9 +157,7 @@ func (r *Result) makeDiscoveryStage() checkreport.Stage {
 
 func (r *Result) makeValidationStage() checkreport.Stage {
 	checks := make([]checkreport.Check, 0, len(r.RuleChecks)+len(r.Entrypoints)+len(r.IgnoredProblems))
-	for _, rule := range r.RuleChecks {
-		checks = append(checks, rule)
-	}
+	checks = append(checks, r.RuleChecks...)
 	for i, problem := range r.IgnoredProblems {
 		checks = append(checks, checkreport.Check{
 			ID:      "problem." + problem.Code,

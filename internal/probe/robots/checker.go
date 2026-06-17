@@ -12,6 +12,7 @@ import (
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/core/httpx"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 const (
@@ -127,7 +128,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, err
 	}
 	if robotsURL == "" {
-		return nil, fmt.Errorf("either -H/--hostname, -u/--url or --robots-url is required")
+		return nil, probecli.ErrInputRequiredAny(
+			probecli.InputRefHostname,
+			probecli.InputRefURL,
+			probecli.InputRefRobotsURL,
+		)
 	}
 
 	client := cfg.HTTPClient

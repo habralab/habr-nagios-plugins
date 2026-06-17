@@ -1,6 +1,8 @@
 BUILD_DIR := build
 GOCACHE := $(CURDIR)/.gocache
 GOMODCACHE := $(CURDIR)/.gomodcache
+STATICCHECK_CACHE := $(CURDIR)/.staticcheck-cache
+STATICCHECK_HOME := $(CURDIR)/.staticcheck-home
 GO ?= go
 MODULE := github.com/habralab/habr-nagios-plugins
 BIN_PREFIX ?= check
@@ -33,7 +35,7 @@ define BIN_NAME
 $(if $(strip $(BIN_VENDOR)),$(BIN_PREFIX)_$(BIN_VENDOR)_$(1),$(BIN_PREFIX)_$(1))
 endef
 
-.PHONY: build build-all build-debug check fmt test test-live package-prepare package-changelog package-deb package-deb-source package-lint package-clean clean distclean cross help FORCE
+.PHONY: build build-all build-debug check fmt vet lint test test-integration test-live package-prepare package-changelog package-deb package-deb-source package-lint package-clean clean distclean cross help FORCE
 
 build: build-all
 
@@ -59,8 +61,22 @@ check:
 fmt:
 	$(GO)fmt ./...
 
+vet:
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO) vet ./...
+
+lint: vet
+	@if command -v staticcheck >/dev/null 2>&1; then \
+		mkdir -p $(STATICCHECK_CACHE) $(STATICCHECK_HOME)/Library/Caches; \
+		HOME=$(STATICCHECK_HOME) GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) XDG_CACHE_HOME=$(STATICCHECK_CACHE) staticcheck ./...; \
+	else \
+		echo "staticcheck not found; skipping staticcheck (install honnef.co/go/tools/cmd/staticcheck to enable it)"; \
+	fi
+
 test:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO) test ./...
+
+test-integration:
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO) test -tags=integration ./...
 
 test-live:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO) test -tags=live ./...
@@ -111,8 +127,11 @@ help:
 		"  build-debug Build debug-friendly binaries with symbols into ./build/" \
 		"  check       Compile all packages" \
 		"  fmt         Run gofmt recursively" \
+		"  vet         Run go vet ./..." \
+		"  lint        Run go vet and staticcheck when staticcheck is installed" \
 		"  test        Run go test ./..." \
-		"  test-live   Run integration tests that use a local live HTTP server" \
+		"  test-integration Run opt-in deterministic integration tests that use local listeners or httptest servers" \
+		"  test-live   Run opt-in external live-network regression tests" \
 		"  package-prepare Refresh committed probe-specific Debian install/docs metadata from probe metadata" \
 		"  package-changelog Generate a snapshot Debian changelog entry for local or CI package builds" \
 		"  package-deb Assemble a Debian binary package with dpkg-buildpackage; assumes prepared manifests and suitable debian/changelog" \

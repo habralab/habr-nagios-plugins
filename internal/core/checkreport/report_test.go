@@ -45,3 +45,14 @@ func TestMetricDisplayValueSupportsNumericFallback(t *testing.T) {
 		t.Fatalf("DisplayValue() = %q, want %q", got, want)
 	}
 }
+
+func TestResultSummaryWithPerfdataUsesSharedShape(t *testing.T) {
+	report := &Report{
+		Status:        StatusWarning,
+		Summary:       "something happened",
+		PrimaryTarget: "example.com",
+	}
+	if got, want := ResultSummaryWithPerfdata(report, "metric=1"), "WARNING - something happened (example.com) | metric=1"; got != want {
+		t.Fatalf("ResultSummaryWithPerfdata() = %q, want %q", got, want)
+	}
+}

@@ -2,9 +2,9 @@ package robots
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 	"github.com/habralab/habr-nagios-plugins/internal/core/targeturl"
 )
 
@@ -12,7 +12,7 @@ func normalizeRobotsURL(cfg Config) (string, string, string, error) {
 	if cfg.RobotsURL != "" {
 		u, err := targeturl.Normalize(cfg.RobotsURL)
 		if err != nil {
-			return "", "", "", fmt.Errorf("invalid --robots-url: %w", err)
+			return "", "", "", probecli.ErrInvalidInput(probecli.InputRefRobotsURL, err)
 		}
 		return "robots-url", "", u, nil
 	}
@@ -58,26 +58,4 @@ func emptyAsDash(s string) string {
 		return "-"
 	}
 	return s
-}
-
-func sameHost(rawA, rawB string) bool {
-	a, err := url.Parse(rawA)
-	if err != nil {
-		return false
-	}
-	b, err := url.Parse(rawB)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(a.Hostname(), b.Hostname()) && normalizedPort(a) == normalizedPort(b)
-}
-
-func normalizedPort(u *url.URL) string {
-	if p := u.Port(); p != "" {
-		return p
-	}
-	if u.Scheme == "https" {
-		return "443"
-	}
-	return "80"
 }

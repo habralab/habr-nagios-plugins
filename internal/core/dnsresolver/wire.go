@@ -116,6 +116,7 @@ func queryAnyWithExchanger(ctx context.Context, servers []nsAddr, qname string, 
 	if caps, ok := resolverFamilyConstraintsFromContext(ctx); ok {
 		servers = filterNSAddrsByCapabilities(servers, caps)
 	}
+	servers = orderNSAddrsByHealth(ctx, servers)
 	if len(servers) == 0 {
 		return nil, errors.New("no authoritative servers available")
 	}
@@ -141,10 +142,16 @@ func queryAnyWithExchanger(ctx context.Context, servers []nsAddr, qname string, 
 	for range servers {
 		outcome := <-results
 		if outcome.err != nil {
+			if tracker, ok := endpointHealthTrackerFromContext(ctx); ok {
+				tracker.recordFailure(outcome.server.Addr, outcome.err)
+			}
 			errs = append(errs, fmt.Sprintf("%s: %v", outcome.server.Addr, outcome.err))
 			continue
 		}
 		outcome.result.Server = outcome.server
+		if tracker, ok := endpointHealthTrackerFromContext(ctx); ok {
+			tracker.recordSuccess(outcome.server.Addr, outcome.result.RTT)
+		}
 		cancel()
 		return outcome.result, nil
 	}
@@ -276,7 +283,7 @@ func zoneAncestry(zone string) []string {
 }
 
 func buildZoneChain(ctx context.Context, zone string) ([]delegationHop, error) {
-	return buildZoneChainWithResolver(ctx, zone, queryAny, resolveNameServers)
+	return buildZoneChainWithResolver(ctx, zone, queryAny, resolveNameServersBestEffort)
 }
 
 func buildZoneChainWithResolver(
@@ -303,7 +310,7 @@ func buildZoneChainWithResolver(
 		if ref == nil {
 			return nil, fmt.Errorf("no NS delegation material found for %s from parent %s", childZone, parentZone)
 		}
-		childServers, err := completeReferralServersWithResolver(ctx, ref.Zone, ref.NS, extractGlue(res.Msg, ref.NS), resolver)
+		childServers, err := completeReferralServersWithResolver(ctx, ref.Zone, ref.NS, extractGlue(res.Msg, ref.NS), resolver, defaultExecutionPolicy())
 		if err != nil {
 			return nil, fmt.Errorf("resolve delegation name servers for %s: %w", childZone, err)
 		}
@@ -323,18 +330,15 @@ func buildZoneChainWithResolver(
 }
 
 func completeReferralServers(ctx context.Context, zone string, nsNames []string, glue []nsAddr) ([]nsAddr, error) {
-	return completeReferralServersWithResolver(ctx, zone, nsNames, glue, resolveNameServersBestEffort)
+	return completeReferralServersWithResolver(ctx, zone, nsNames, glue, resolveNameServersBestEffort, defaultExecutionPolicy())
 }
 
-func completeReferralServersWithResolver(ctx context.Context, zone string, nsNames []string, glue []nsAddr, resolver func(context.Context, []string) ([]nsAddr, error)) ([]nsAddr, error) {
+func completeReferralServersWithResolver(ctx context.Context, zone string, nsNames []string, glue []nsAddr, resolver func(context.Context, []string) ([]nsAddr, error), policy executionPolicy) ([]nsAddr, error) {
 	if len(nsNames) == 0 {
 		return nil, errors.New("referral did not contain any NS names")
 	}
 
-	out := append([]nsAddr(nil), glue...)
-	if len(out) > 0 {
-		return uniqueNSAddrs(out), nil
-	}
+	out := acceptedGlueAddrs(zone, nsNames, glue, policy.GlueMode)
 	missing := missingNSNames(nsNames, glue)
 	if len(missing) == 0 {
 		return uniqueNSAddrs(out), nil
@@ -357,6 +361,35 @@ func completeReferralServersWithResolver(ctx context.Context, zone string, nsNam
 	}
 	out = append(out, resolved...)
 	return uniqueNSAddrs(out), nil
+}
+
+func acceptedGlueAddrs(zone string, nsNames []string, glue []nsAddr, mode glueAcceptanceMode) []nsAddr {
+	if len(glue) == 0 {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, name := range nsNames {
+		want[dns.Fqdn(name)] = true
+	}
+	zone = dns.Fqdn(zone)
+	var out []nsAddr
+	for _, addr := range glue {
+		name := dns.Fqdn(addr.Name)
+		if !want[name] {
+			continue
+		}
+		switch mode {
+		case glueAcceptancePermissive:
+			out = append(out, addr)
+		case glueAcceptanceStrict, glueAcceptanceNormal:
+			if zone == "." || dns.IsSubDomain(zone, name) {
+				out = append(out, addr)
+			}
+		default:
+			out = append(out, addr)
+		}
+	}
+	return uniqueNSAddrs(out)
 }
 
 func bootstrapResolvableNSNames(zone string, names []string) ([]string, []string) {
@@ -386,20 +419,6 @@ func missingNSNames(nsNames []string, known []nsAddr) []string {
 		}
 	}
 	return missing
-}
-
-func resolveNameServers(ctx context.Context, names []string) ([]nsAddr, error) {
-	var out []nsAddr
-	for _, name := range uniqueStrings(names) {
-		addrs, err := resolveHostAddresses(ctx, name)
-		if err != nil {
-			return nil, err
-		}
-		for _, addr := range addrs {
-			out = append(out, nsAddr{Name: dns.Fqdn(name), Addr: addr})
-		}
-	}
-	return uniqueNSAddrs(out), nil
 }
 
 func resolveNameServersBestEffort(ctx context.Context, names []string) ([]nsAddr, error) {
@@ -530,24 +549,11 @@ func resolveHostAddressesUncached(ctx context.Context, name string) ([]string, e
 	}
 	if aErr != nil {
 		if aaaaErr != nil {
-			return nil, fmt.Errorf("A lookup failed: %v; AAAA lookup failed: %v", aErr, aaaaErr)
+			return nil, fmt.Errorf("a lookup failed: %v; AAAA lookup failed: %v", aErr, aaaaErr)
 		}
-		return nil, fmt.Errorf("A lookup failed: %v", aErr)
+		return nil, fmt.Errorf("a lookup failed: %v", aErr)
 	}
 	return nil, fmt.Errorf("no addresses found for %s", name)
-}
-
-func rrsetNames(msg *dns.Msg, owner string, rrtype uint16) []string {
-	var values []string
-	for _, rr := range msg.Answer {
-		if rr.Header().Rrtype != rrtype || dns.Fqdn(rr.Header().Name) != dns.Fqdn(owner) {
-			continue
-		}
-		if ns, ok := rr.(*dns.NS); ok {
-			values = append(values, dns.Fqdn(ns.Ns))
-		}
-	}
-	return uniqueStrings(values)
 }
 
 func uniqueStrings(values []string) []string {

@@ -12,13 +12,7 @@ func (r *Result) ExitCode() int {
 }
 
 func (r *Result) Summary() string {
-	report := r.reportView()
-	return fmt.Sprintf("%s - %s (%s) | %s",
-		report.NagiosLabel(),
-		report.Summary,
-		report.EffectiveTarget(),
-		checkreport.Perfdata(report, true),
-	)
+	return checkreport.ResultSummaryWithPerfdata(r.reportView(), checkreport.Perfdata(r.reportView(), true))
 }
 
 func (r *Result) Detail() string {

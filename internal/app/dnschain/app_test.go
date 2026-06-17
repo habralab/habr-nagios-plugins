@@ -1,16 +1,14 @@
 package dnschainapp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
 	"github.com/habralab/habr-nagios-plugins/internal/probe/dnschain"
+	"github.com/habralab/habr-nagios-plugins/internal/testkit/apptest"
 )
 
 const testProgramName = "check_dnschain"
@@ -188,22 +186,7 @@ func (placeholderAnalyzerShim) Analyze(ctx context.Context, cfg dnschain.Config,
 
 func runWithCapturedStdout(t *testing.T, programName string, args []string) (int, string) {
 	t.Helper()
-
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	defer r.Close()
-	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
-
-	exitCode := Run(programName, args)
-	w.Close()
-
-	var out bytes.Buffer
-	if _, err := io.Copy(&out, r); err != nil {
-		t.Fatalf("io.Copy() error = %v", err)
-	}
-	return exitCode, out.String()
+	return apptest.RunWithCapturedStdout(t, func() int {
+		return Run(programName, args)
+	})
 }

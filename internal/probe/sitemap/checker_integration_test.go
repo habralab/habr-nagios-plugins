@@ -1,4 +1,4 @@
-//go:build live
+//go:build integration
 
 package sitemap
 
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestRunLiveHTTPServer(t *testing.T) {
+func TestRunIntegrationHTTPServer(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -56,7 +56,7 @@ func TestRunLiveHTTPServer(t *testing.T) {
 	}
 }
 
-func TestRunLiveHTTPBadStatus(t *testing.T) {
+func TestRunIntegrationHTTPBadStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 	}))
@@ -80,7 +80,7 @@ func TestRunLiveHTTPBadStatus(t *testing.T) {
 	}
 }
 
-func TestRunLiveBrokenXML(t *testing.T) {
+func TestRunIntegrationBrokenXML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>https://probe.test/page</loc></url>`)
@@ -105,7 +105,7 @@ func TestRunLiveBrokenXML(t *testing.T) {
 	}
 }
 
-func TestRunLiveUnexpectedContentType(t *testing.T) {
+func TestRunIntegrationUnexpectedContentType(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -131,7 +131,7 @@ func TestRunLiveUnexpectedContentType(t *testing.T) {
 	}
 }
 
-func TestRunLiveBrokenGzip(t *testing.T) {
+func TestRunIntegrationBrokenGzip(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		w.Header().Set("Content-Encoding", "gzip")
@@ -157,7 +157,7 @@ func TestRunLiveBrokenGzip(t *testing.T) {
 	}
 }
 
-func TestRunLiveEmptyDocument(t *testing.T) {
+func TestRunIntegrationEmptyDocument(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 	}))
@@ -181,7 +181,7 @@ func TestRunLiveEmptyDocument(t *testing.T) {
 	}
 }
 
-func TestRunLiveInvalidURLPayload(t *testing.T) {
+func TestRunIntegrationInvalidURLPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>://bad-url</loc></url></urlset>`)
@@ -206,7 +206,7 @@ func TestRunLiveInvalidURLPayload(t *testing.T) {
 	}
 }
 
-func TestRunLiveTextSitemap(t *testing.T) {
+func TestRunIntegrationTextSitemap(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -232,7 +232,7 @@ func TestRunLiveTextSitemap(t *testing.T) {
 	}
 }
 
-func TestRunLiveTextSitemapScopeViolation(t *testing.T) {
+func TestRunIntegrationTextSitemapScopeViolation(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -258,7 +258,7 @@ func TestRunLiveTextSitemapScopeViolation(t *testing.T) {
 	}
 }
 
-func TestRunLiveTruncatedBody(t *testing.T) {
+func TestRunIntegrationTruncatedBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hj, ok := w.(http.Hijacker)
 		if !ok {

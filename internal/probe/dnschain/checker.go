@@ -3,10 +3,10 @@ package dnschain
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 type Config struct {
@@ -65,22 +65,19 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 }
 
 func normalizeTarget(cfg Config) (string, error) {
-	zone := strings.TrimSpace(cfg.Zone)
-	host := strings.TrimSpace(cfg.Hostname)
-
-	switch {
-	case zone != "":
-		return strings.TrimSuffix(zone, "."), nil
-	case host != "":
-		return strings.TrimSuffix(host, "."), nil
-	default:
-		return "", fmt.Errorf("either -H/--hostname or --zone is required")
+	resolved, err := probecli.ResolveDNSTargetInput(probecli.DNSTargetInput{
+		Hostname: cfg.Hostname,
+		Zone:     cfg.Zone,
+	})
+	if err != nil {
+		return "", err
 	}
+	return resolved.Target, nil
 }
 
 func targetSelectionMessage(cfg Config, target string) string {
 	switch {
-	case strings.TrimSpace(cfg.Zone) != "":
+	case cfg.Zone != "":
 		return fmt.Sprintf("target zone=%q selected from --zone", target)
 	default:
 		return fmt.Sprintf("target name=%q selected from --hostname", target)
