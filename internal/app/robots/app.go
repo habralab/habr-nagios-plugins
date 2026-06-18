@@ -37,6 +37,7 @@ func Run(programName string, args []string) int {
 		Verbosity:       func(cfg robots.Config) int { return cfg.Verbosity },
 		DecorateReport: func(ctx context.Context, cfg robots.Config, report *checkreport.Report) {
 			probecli.DecorateReportWithCacheBackendInspection(ctx, cfg.CacheBackend, cfg.HTTPClient == nil, report)
+			probecli.DecorateReportWithTransportFamilyRuntime(ctx, cfg.HTTP.TransportFamilyPolicy, cfg.Timeout, report)
 		},
 	})
 }
@@ -69,6 +70,7 @@ func parseFlags(binName string, args []string) (robots.Config, error) {
 	cfg.ForbidDisallows = probecli.DecodeCSVInput(inputs, "forbid_disallow")
 	cfg.HTTP.UserAgent = inputs.String("user_agent")
 	cfg.HTTP.InsecureSkipVerify = inputs.Bool("insecure_skip_verify")
+	cfg.HTTP.TransportFamilyPolicy = resolved.TransportFamilyPolicy
 	cfg.Timeout = resolved.Timeout
 	cfg.CacheBackend = resolved.CacheBackend
 	cfg.Verbosity = resolved.Verbosity

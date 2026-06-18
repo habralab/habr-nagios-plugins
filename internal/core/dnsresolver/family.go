@@ -6,17 +6,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 )
 
-type resolverFamilyCapabilities struct {
-	IPv4 bool
-	IPv6 bool
-}
+type resolverFamilyCapabilities = ipfamily.Capabilities
 
 type familyConstraintContextKey struct{}
 
-var resolverFamilyProbeFn = detectResolverFamilyCapabilities
+var resolverFamilyProbeFn = ipfamily.DetectCapabilities
 
 func withResolverFamilyConstraints(ctx context.Context, caps resolverFamilyCapabilities) context.Context {
 	return context.WithValue(ctx, familyConstraintContextKey{}, caps)
@@ -31,42 +28,7 @@ func detectResolverFamilyCapabilities(ctx context.Context, timeout time.Duration
 	if timeout <= 0 {
 		timeout = defaultDNSQueryTimeout
 	}
-	if timeout > 1500*time.Millisecond {
-		timeout = 1500 * time.Millisecond
-	}
-	ctx = withDNSQueryTimeout(ctx, timeout)
-	return resolverFamilyCapabilities{
-		IPv4: probeDNSFamily(ctx, false),
-		IPv6: probeDNSFamily(ctx, true),
-	}
-}
-
-func probeDNSFamily(ctx context.Context, wantIPv6 bool) bool {
-	var candidates []nsAddr
-	for _, server := range rootHintsAny {
-		ip := hostIP(server.Addr)
-		if ip == nil {
-			continue
-		}
-		isIPv6 := ip.To4() == nil
-		if isIPv6 != wantIPv6 {
-			continue
-		}
-		candidates = append(candidates, server)
-		if len(candidates) >= 3 {
-			break
-		}
-	}
-	for _, candidate := range candidates {
-		res, err := exchangeDNS(ctx, candidate.Addr, ".", dns.TypeNS, false)
-		if err != nil {
-			continue
-		}
-		if res != nil && res.Msg != nil {
-			return true
-		}
-	}
-	return false
+	return resolverFamilyProbeFn(ctx, timeout)
 }
 
 func hostIP(endpoint string) net.IP {

@@ -211,6 +211,12 @@ func WriteReportStagesSection(b *strings.Builder, report *Report, verbosity int)
 				for _, attr := range ev.Attributes {
 					fmt.Fprintf(b, "        %s=%s\n", attr.Key, attr.Value)
 				}
+				for _, item := range ev.Items {
+					fmt.Fprintf(b, "        item id=%s subject=%s summary=%s\n", EmptyAsDash(item.ID), EmptyAsDash(item.Subject), EmptyAsDash(item.Summary))
+					for _, attr := range item.Attributes {
+						fmt.Fprintf(b, "          %s=%s\n", attr.Key, attr.Value)
+					}
+				}
 			}
 		}
 		for _, note := range stage.Notes {

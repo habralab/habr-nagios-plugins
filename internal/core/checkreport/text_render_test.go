@@ -118,6 +118,14 @@ func TestWriteReportSections(t *testing.T) {
 					Attributes: []KV{
 						{Key: "suite", Value: "AES"},
 					},
+					Items: []EvidenceItem{{
+						ID:      "endpoint_profile",
+						Subject: "192.0.2.10:443",
+						Summary: "structured endpoint semantic profile",
+						Attributes: []KV{
+							{Key: "transport.alpn", Value: "h2"},
+						},
+					}},
 				}},
 			}},
 			Notes: []string{"stage note"},
@@ -148,6 +156,8 @@ func TestWriteReportSections(t *testing.T) {
 		"Stages:\n",
 		"check=version state=warning subject=TLS 1.2 message=deprecated version accepted",
 		"evidence kind=probe summary=probe evidence",
+		"item id=endpoint_profile subject=192.0.2.10:443 summary=structured endpoint semantic profile",
+		"transport.alpn=h2",
 		"note=stage note",
 		"Trace:\n",
 		"kind=net stage=handshake state=note target=www.example.com:443 message=trace line",

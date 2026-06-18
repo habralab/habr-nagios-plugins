@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 )
 
 const (
@@ -15,12 +16,13 @@ const (
 )
 
 type Options struct {
-	InsecureSkipVerify bool
-	UserAgent          string
-	DNSResolver        DNSResolver
-	DNSLookupTimeout   time.Duration
-	CacheBackend       string
-	ResolverObserver   func(DNSResolver)
+	InsecureSkipVerify    bool
+	UserAgent             string
+	DNSResolver           DNSResolver
+	DNSLookupTimeout      time.Duration
+	CacheBackend          string
+	TransportFamilyPolicy ipfamily.Policy
+	ResolverObserver      func(DNSResolver)
 }
 
 func DefaultUserAgent() string {

@@ -185,17 +185,26 @@ func TestRunJSONOutputIncludesRuntimeCacheBackendStage(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v\noutput=%s", err, output)
 	}
 	var found bool
+	var familyFound bool
 	for _, stage := range report.Stages {
-		if stage.ID != "runtime.cache_backend" || len(stage.Checks) == 0 {
-			continue
+		if stage.ID == "runtime.cache_backend" && len(stage.Checks) > 0 {
+			found = true
+			if !containsKV(stage.Checks[0].Meta, "usage_state", "active") {
+				t.Fatalf("runtime.cache_backend meta = %#v, want usage_state=active", stage.Checks[0].Meta)
+			}
 		}
-		found = true
-		if !containsKV(stage.Checks[0].Meta, "usage_state", "active") {
-			t.Fatalf("runtime.cache_backend meta = %#v, want usage_state=active", stage.Checks[0].Meta)
+		if stage.ID == "runtime.transport_family" && len(stage.Checks) > 0 {
+			familyFound = true
+			if !containsKV(stage.Checks[0].Meta, "policy", "auto") {
+				t.Fatalf("runtime.transport_family meta = %#v, want policy=auto", stage.Checks[0].Meta)
+			}
 		}
 	}
 	if !found {
 		t.Fatalf("report.Stages = %#v, want runtime.cache_backend", report.Stages)
+	}
+	if !familyFound {
+		t.Fatalf("report.Stages = %#v, want runtime.transport_family", report.Stages)
 	}
 }
 

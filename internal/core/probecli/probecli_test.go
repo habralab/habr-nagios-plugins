@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 )
 
 func TestEffectiveProgramNameFallsBack(t *testing.T) {
@@ -178,6 +179,44 @@ func TestRenderHelpDocumentIncludesCommonOptions(t *testing.T) {
 	}
 }
 
+func TestTransportFamilyRuntimeStageIncludesAssessmentMeta(t *testing.T) {
+	stage := transportFamilyRuntimeStage(
+		ipfamily.PolicyAuto,
+		ipfamily.Assessment{
+			IPv4:   ipfamily.FamilyAssessment{Availability: ipfamily.AvailabilityAvailable, Reason: "probe_ok"},
+			IPv6:   ipfamily.FamilyAssessment{Availability: ipfamily.AvailabilityHardUnavailable, Reason: "link_local_only"},
+			Cached: true,
+		},
+		ipfamily.Capabilities{IPv4: true},
+	)
+	if got, want := stage.ID, "runtime.transport_family"; got != want {
+		t.Fatalf("stage.ID = %q, want %q", got, want)
+	}
+	if got, want := len(stage.Checks), 1; got != want {
+		t.Fatalf("len(stage.Checks) = %d, want %d", got, want)
+	}
+	check := stage.Checks[0]
+	for key, value := range map[string]string{
+		"policy":               "auto",
+		"detected_ipv4":        "true",
+		"detected_ipv6":        "false",
+		"detected_ipv4_state":  "available",
+		"detected_ipv6_state":  "hard_unavailable",
+		"detected_ipv4_reason": "probe_ok",
+		"detected_ipv6_reason": "link_local_only",
+		"effective_ipv4":       "true",
+		"effective_ipv6":       "false",
+		"cached":               "true",
+	} {
+		if !containsKV(check.Meta, key, value) {
+			t.Fatalf("check.Meta = %#v, want %s=%s", check.Meta, key, value)
+		}
+	}
+	if !strings.Contains(check.Message, "reasons=ipv4:probe_ok,ipv6:link_local_only") {
+		t.Fatalf("check.Message = %q, want reasons summary", check.Message)
+	}
+}
+
 type stubResult struct {
 	summary string
 	detail  string
@@ -190,6 +229,15 @@ func (r stubResult) JSON() ([]byte, error) { return []byte(r.json), r.err }
 func (r stubResult) Summary() string       { return r.summary }
 func (r stubResult) Detail() string        { return r.detail }
 func (r stubResult) ExitCode() int         { return r.exit }
+
+func containsKV(items []checkreport.KV, key, value string) bool {
+	for _, item := range items {
+		if item.Key == key && item.Value == value {
+			return true
+		}
+	}
+	return false
+}
 
 func TestRenderResult(t *testing.T) {
 	jsonOut, exitCode, err := RenderResult(stubResult{json: `{"ok":true}`, exit: 1}, checkreport.OutputJSON, 0)
@@ -412,6 +460,44 @@ func TestCommonFlagsResolveBareIntegerTimeoutAsSeconds(t *testing.T) {
 	}
 	if got, want := opts.Timeout, 45*time.Second; got != want {
 		t.Fatalf("CommonFlags.Resolve() timeout = %v, want %v", got, want)
+	}
+}
+
+func TestCommonFlagsResolveIPFamilyPolicy(t *testing.T) {
+	fs, common, err := NewCommonFlagSet("check_probe", []string{"--ip-family", "ipv6"})
+	if err != nil {
+		t.Fatalf("NewCommonFlagSet() error = %v", err)
+	}
+	common.Register(fs, "30s")
+	if err := fs.Parse(common.Args()); err != nil {
+		t.Fatalf("FlagSet.Parse() error = %v", err)
+	}
+
+	opts, err := common.Resolve(func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("CommonFlags.Resolve() error = %v", err)
+	}
+	if got, want := opts.TransportFamilyPolicy, ipfamily.PolicyIPv6; got != want {
+		t.Fatalf("CommonFlags.Resolve() transport family = %q, want %q", got, want)
+	}
+}
+
+func TestCommonFlagsResolveUseIPv4Sugar(t *testing.T) {
+	fs, common, err := NewCommonFlagSet("check_probe", []string{"--use-ipv4"})
+	if err != nil {
+		t.Fatalf("NewCommonFlagSet() error = %v", err)
+	}
+	common.Register(fs, "30s")
+	if err := fs.Parse(common.Args()); err != nil {
+		t.Fatalf("FlagSet.Parse() error = %v", err)
+	}
+
+	opts, err := common.Resolve(func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("CommonFlags.Resolve() error = %v", err)
+	}
+	if got, want := opts.TransportFamilyPolicy, ipfamily.PolicyIPv4; got != want {
+		t.Fatalf("CommonFlags.Resolve() transport family = %q, want %q", got, want)
 	}
 }
 

@@ -5,6 +5,7 @@ const (
 	InputRefOutput       InputRef = "output"
 	InputRefIgnoreError  InputRef = "ignore_errors"
 	InputRefCacheBackend InputRef = "cache_backend"
+	InputRefIPFamily     InputRef = "ip_family"
 )
 
 func CommonInputLabels() InputLabels {
@@ -13,5 +14,6 @@ func CommonInputLabels() InputLabels {
 		InputRefOutput:       "--output",
 		InputRefIgnoreError:  "--ignore-errors",
 		InputRefCacheBackend: "--cache-backend",
+		InputRefIPFamily:     "--ip-family",
 	}
 }

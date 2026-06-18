@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 	"github.com/habralab/habr-nagios-plugins/internal/core/sharedcache"
 	"github.com/miekg/dns"
 )
@@ -90,6 +91,7 @@ type Resolver struct {
 	validateFlights *flightGroup[validationResult]
 	sharedCache     sharedcache.Backend
 	sharedCacheDesc sharedcache.BackendDescriptor
+	familyPolicy    ipfamily.Policy
 	hostAddrCache   *hostAddressCache
 	execPolicy      executionPolicy
 	endpointHealth  *endpointHealthTracker
@@ -100,6 +102,8 @@ type Resolver struct {
 	iterativeFn     func(context.Context, string, uint16) (*iterativeResult, error)
 	validateFn      func(context.Context, string, []nsAddr) (SecurityState, []*dns.DNSKEY, string, error)
 }
+
+var buildZoneChainFn = buildZoneChain
 
 // NewResolver creates a per-session authoritative DNS/DNSSEC resolver.
 // Its caches are scoped to this resolver instance so a single probe run can
@@ -122,6 +126,7 @@ func NewResolver(queryTimeout time.Duration) *Resolver {
 			Supported:   true,
 			Description: "per-run internal cache only; no external shared cache backend is configured",
 		},
+		familyPolicy:   ipfamily.PolicyAuto,
 		hostAddrCache:  newHostAddressCache(),
 		execPolicy:     defaultExecutionPolicy(),
 		endpointHealth: newEndpointHealthTracker(),
@@ -134,13 +139,30 @@ func NewResolver(queryTimeout time.Duration) *Resolver {
 }
 
 func (r *Resolver) familyCapabilities(ctx context.Context) resolverFamilyCapabilities {
+	if !r.familyPolicy.RequiresDetection() {
+		return r.familyPolicy.EffectiveCapabilities(resolverFamilyCapabilities{})
+	}
 	if r.QueryTimeout == 0 {
 		return resolverFamilyCapabilities{IPv4: true, IPv6: true}
 	}
 	r.familyCaps.once.Do(func() {
 		r.familyCaps.caps = resolverFamilyProbeFn(ctx, r.QueryTimeout)
 	})
-	return r.familyCaps.caps
+	return r.familyPolicy.EffectiveCapabilities(r.familyCaps.caps)
+}
+
+func (r *Resolver) SetTransportFamilyPolicy(policy ipfamily.Policy) {
+	if policy == "" {
+		policy = ipfamily.PolicyAuto
+	}
+	r.familyPolicy = policy
+}
+
+func (r *Resolver) TransportFamilyPolicy() ipfamily.Policy {
+	if r.familyPolicy == "" {
+		return ipfamily.PolicyAuto
+	}
+	return r.familyPolicy
 }
 
 type validationResult struct {
@@ -285,6 +307,7 @@ func (r *Resolver) lookupWithAuthority(ctx context.Context, fqdn string, qtype u
 		if err != nil {
 			return nil, authorityResult{}, err
 		}
+		cached = r.refineAuthorityFromMessage(ctx, fqdn, cached, res.Msg)
 		return &iterativeResult{
 			Response: *res,
 			Hops:     cloneDelegationHops(cached.Hops),
@@ -295,6 +318,7 @@ func (r *Resolver) lookupWithAuthority(ctx context.Context, fqdn string, qtype u
 		if err != nil {
 			return nil, authorityResult{}, err
 		}
+		cached = r.refineAuthorityFromMessage(ctx, fqdn, cached, res.Msg)
 		return &iterativeResult{
 			Response: *res,
 			Hops:     cloneDelegationHops(cached.Hops),
@@ -317,6 +341,38 @@ func (r *Resolver) lookupWithAuthority(ctx context.Context, fqdn string, qtype u
 	r.storeSharedAuthority(ctx, fqdn, authority)
 	r.storeSharedZoneChain(ctx, zone, iter.Hops)
 	return iter, authority, nil
+}
+
+func (r *Resolver) refineAuthorityFromMessage(ctx context.Context, qname string, authority authorityResult, msg *dns.Msg) authorityResult {
+	effectiveZone := authoritativeZoneFromMessage(msg)
+	if effectiveZone == "" {
+		return authority
+	}
+	effectiveZone = dns.Fqdn(effectiveZone)
+	currentZone := dns.Fqdn(authority.Zone)
+	fqdn := dns.Fqdn(qname)
+	if !dns.IsSubDomain(effectiveZone, fqdn) {
+		return authority
+	}
+	if currentZone != "" && dns.CountLabel(effectiveZone) <= dns.CountLabel(currentZone) {
+		return authority
+	}
+
+	refined := authority
+	refined.Zone = effectiveZone
+	if exact, ok := authorityResultForZone(effectiveZone, authority.Hops); ok {
+		refined = exact
+	} else if hops, err := buildZoneChainFn(ctx, effectiveZone); err == nil {
+		if exact, ok := authorityResultForZone(effectiveZone, hops); ok {
+			refined = exact
+		} else {
+			refined.Hops = cloneDelegationHops(hops)
+			refined.CacheTTL = zoneChainTTL(hops)
+		}
+	}
+	r.storeAuthority(fqdn, refined)
+	r.storeZoneChain(effectiveZone, refined.Hops)
+	return refined
 }
 
 func (r *Resolver) LookupEffectiveCAA(ctx context.Context, qname string) (EffectiveCAAResult, error) {
@@ -612,9 +668,9 @@ func (r *Resolver) validateZoneChain(ctx context.Context, zone string, finalServ
 	}
 
 	hops, ok := r.cachedZoneChain(zone)
-	if !ok {
+	if !ok || !zoneChainCoversZone(hops, zone) {
 		var err error
-		hops, err = buildZoneChain(ctx, zone)
+		hops, err = buildZoneChainFn(ctx, zone)
 		if err != nil {
 			return SecurityIndeterminate, nil, "", err
 		}
@@ -689,6 +745,13 @@ func (r *Resolver) validateZoneChain(ctx context.Context, zone string, finalServ
 
 	_ = finalServers
 	return SecuritySecure, trustedKeys, fmt.Sprintf("DNSSEC chain to %s validated successfully", zone), nil
+}
+
+func zoneChainCoversZone(hops []delegationHop, zone string) bool {
+	if len(hops) == 0 {
+		return dns.Fqdn(zone) == "."
+	}
+	return dns.Fqdn(hops[len(hops)-1].ToZone) == dns.Fqdn(zone)
 }
 
 func (r *Resolver) CacheStats() CacheStats {

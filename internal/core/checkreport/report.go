@@ -87,8 +87,16 @@ type Check struct {
 }
 
 type Evidence struct {
-	Kind       string `json:"kind"`
-	Summary    string `json:"summary"`
+	Kind       string         `json:"kind"`
+	Summary    string         `json:"summary"`
+	Attributes []KV           `json:"attributes,omitempty"`
+	Items      []EvidenceItem `json:"items,omitempty"`
+}
+
+type EvidenceItem struct {
+	ID         string `json:"id,omitempty"`
+	Subject    string `json:"subject,omitempty"`
+	Summary    string `json:"summary,omitempty"`
 	Attributes []KV   `json:"attributes,omitempty"`
 }
 
@@ -101,13 +109,13 @@ type Finding struct {
 }
 
 type TraceEvent struct {
-	Kind       string     `json:"kind"`
-	StageID    string     `json:"stage_id,omitempty"`
-	State      CheckState `json:"state,omitempty"`
-	Target     string     `json:"target,omitempty"`
-	Message    string     `json:"message"`
-	Attributes []KV       `json:"attributes,omitempty"`
-	MinVerbosity int      `json:"min_verbosity,omitempty"`
+	Kind         string     `json:"kind"`
+	StageID      string     `json:"stage_id,omitempty"`
+	State        CheckState `json:"state,omitempty"`
+	Target       string     `json:"target,omitempty"`
+	Message      string     `json:"message"`
+	Attributes   []KV       `json:"attributes,omitempty"`
+	MinVerbosity int        `json:"min_verbosity,omitempty"`
 }
 
 type Metric struct {

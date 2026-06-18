@@ -6,31 +6,34 @@ import (
 	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 	"github.com/habralab/habr-nagios-plugins/internal/core/probecli"
 )
 
 type Config struct {
-	Hostname       string
-	Zone           string
-	Timeout        time.Duration
-	CacheBackend   string
-	QueryTimeout   time.Duration
-	Verbosity      int
-	OutputMode     checkreport.OutputMode
-	IgnoreErrors   []string
-	IgnoreErrorSet map[string]bool
-	ShowHelp       bool
-	ShowVersion    bool
-	ShowErrorSlugs bool
-	Analyzer       Analyzer
+	Hostname              string
+	Zone                  string
+	Timeout               time.Duration
+	CacheBackend          string
+	QueryTimeout          time.Duration
+	TransportFamilyPolicy ipfamily.Policy
+	Verbosity             int
+	OutputMode            checkreport.OutputMode
+	IgnoreErrors          []string
+	IgnoreErrorSet        map[string]bool
+	ShowHelp              bool
+	ShowVersion           bool
+	ShowErrorSlugs        bool
+	Analyzer              Analyzer
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Timeout:        60 * time.Second,
-		QueryTimeout:   3 * time.Second,
-		OutputMode:     checkreport.OutputNagios,
-		IgnoreErrorSet: map[string]bool{},
+		Timeout:               60 * time.Second,
+		QueryTimeout:          3 * time.Second,
+		TransportFamilyPolicy: ipfamily.PolicyAuto,
+		OutputMode:            checkreport.OutputNagios,
+		IgnoreErrorSet:        map[string]bool{},
 	}
 }
 

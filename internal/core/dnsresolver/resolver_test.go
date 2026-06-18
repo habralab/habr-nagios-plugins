@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -467,6 +468,136 @@ func TestResolverLookupUsesSOAOwnerAsFinalZone(t *testing.T) {
 	_, err := r.Lookup(context.Background(), "_443._tcp.www.cloudflare.com.", dns.TypeTLSA)
 	if err != nil {
 		t.Fatalf("Lookup() error = %v", err)
+	}
+}
+
+func TestValidateZoneChainRefreshesCachedShallowChain(t *testing.T) {
+	r := NewResolver(time.Millisecond)
+	r.storeValidation(".", validationResult{
+		Security: SecuritySecure,
+		Keys: []*dns.DNSKEY{
+			{Hdr: dns.RR_Header{Name: ".", Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET}},
+		},
+		Message: "root secure",
+	})
+	r.storeZoneChain("www.cloudflare.com.", []delegationHop{{
+		FromZone:      "com.",
+		ToZone:        "cloudflare.com.",
+		ParentServers: []nsAddr{{Name: "a.gtld-servers.net.", Addr: "192.0.2.1:53"}},
+		ChildServers:  []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+	}})
+
+	origBuild := buildZoneChainFn
+	defer func() { buildZoneChainFn = origBuild }()
+
+	buildCalls := 0
+	buildZoneChainFn = func(_ context.Context, zone string) ([]delegationHop, error) {
+		buildCalls++
+		if zone != "www.cloudflare.com." {
+			t.Fatalf("zone = %q, want www.cloudflare.com.", zone)
+		}
+		return []delegationHop{
+			{
+				FromZone:      ".",
+				ToZone:        "com.",
+				ParentServers: []nsAddr{{Name: "a.root-servers.net.", Addr: "192.0.2.2:53"}},
+				ChildServers:  []nsAddr{{Name: "a.gtld-servers.net.", Addr: "192.0.2.1:53"}},
+			},
+			{
+				FromZone:      "com.",
+				ToZone:        "cloudflare.com.",
+				ParentServers: []nsAddr{{Name: "a.gtld-servers.net.", Addr: "192.0.2.1:53"}},
+				ChildServers:  []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+			},
+			{
+				FromZone:      "cloudflare.com.",
+				ToZone:        "www.cloudflare.com.",
+				ParentServers: []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+				ChildServers:  []nsAddr{{Name: "jule.ns.cloudflare.com.", Addr: "192.0.2.54:53"}},
+			},
+		}, nil
+	}
+
+	if _, _, _, err := r.validateZoneChain(context.Background(), "www.cloudflare.com.", nil); err == nil {
+		t.Fatal("validateZoneChain() error = nil, want downstream DNS validation failure after rebuilding chain")
+	}
+	if buildCalls != 1 {
+		t.Fatalf("buildZoneChainFn calls = %d, want 1 refresh from shallow cached chain", buildCalls)
+	}
+	if cached, ok := r.cachedZoneChain("www.cloudflare.com."); !ok || !zoneChainCoversZone(cached, "www.cloudflare.com.") {
+		t.Fatalf("cached zone chain was not refreshed to cover www.cloudflare.com.")
+	}
+}
+
+func TestRefineAuthorityFromMessageUsesSOAOwnerAndRefreshesChain(t *testing.T) {
+	r := NewResolver(0)
+	authority := authorityResult{
+		Zone: "cloudflare.com.",
+		Servers: []nsAddr{
+			{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"},
+		},
+		Hops: []delegationHop{{
+			FromZone:      "com.",
+			ToZone:        "cloudflare.com.",
+			ParentServers: []nsAddr{{Name: "a.gtld-servers.net.", Addr: "192.0.2.1:53"}},
+			ChildServers:  []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+		}},
+	}
+	msg := &dns.Msg{
+		Ns: []dns.RR{
+			&dns.SOA{
+				Hdr:     dns.RR_Header{Name: "www.cloudflare.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 1800},
+				Ns:      "jule.ns.cloudflare.com.",
+				Mbox:    "dns.cloudflare.com.",
+				Serial:  1,
+				Refresh: 10000,
+				Retry:   2400,
+				Expire:  604800,
+				Minttl:  1800,
+			},
+		},
+	}
+
+	origBuild := buildZoneChainFn
+	defer func() { buildZoneChainFn = origBuild }()
+
+	buildCalls := 0
+	buildZoneChainFn = func(_ context.Context, zone string) ([]delegationHop, error) {
+		buildCalls++
+		if zone != "www.cloudflare.com." {
+			t.Fatalf("zone = %q, want www.cloudflare.com.", zone)
+		}
+		return []delegationHop{
+			{
+				FromZone:      ".",
+				ToZone:        "com.",
+				ParentServers: []nsAddr{{Name: "a.root-servers.net.", Addr: "192.0.2.2:53"}},
+				ChildServers:  []nsAddr{{Name: "a.gtld-servers.net.", Addr: "192.0.2.1:53"}},
+			},
+			{
+				FromZone:      "com.",
+				ToZone:        "cloudflare.com.",
+				ParentServers: []nsAddr{{Name: "a.gtld-servers.net.", Addr: "192.0.2.1:53"}},
+				ChildServers:  []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+			},
+			{
+				FromZone:      "cloudflare.com.",
+				ToZone:        "www.cloudflare.com.",
+				ParentServers: []nsAddr{{Name: "ns1.cloudflare.com.", Addr: "192.0.2.53:53"}},
+				ChildServers:  []nsAddr{{Name: "jule.ns.cloudflare.com.", Addr: "192.0.2.54:53"}},
+			},
+		}, nil
+	}
+
+	refined := r.refineAuthorityFromMessage(context.Background(), "_443._tcp.www.cloudflare.com.", authority, msg)
+	if got, want := refined.Zone, "www.cloudflare.com."; got != want {
+		t.Fatalf("refined.Zone = %q, want %q", got, want)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("buildZoneChainFn calls = %d, want 1", buildCalls)
+	}
+	if len(refined.Servers) != 1 || refined.Servers[0].Name != "jule.ns.cloudflare.com." {
+		t.Fatalf("refined.Servers = %#v, want refreshed final-zone authoritative servers", refined.Servers)
 	}
 }
 

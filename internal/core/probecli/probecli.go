@@ -15,6 +15,7 @@ import (
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/buildinfo"
 	"github.com/habralab/habr-nagios-plugins/internal/core/checkreport"
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 	"github.com/habralab/habr-nagios-plugins/internal/core/msgcatalog"
 	"github.com/habralab/habr-nagios-plugins/internal/core/verbosity"
 )
@@ -60,6 +61,9 @@ type CommonFlags struct {
 	Timeout         string
 	Output          string
 	CacheBackend    string
+	IPFamily        string
+	UseIPv4         bool
+	UseIPv6         bool
 	IgnoreErrorsRaw string
 	Verbosity       int
 	ShowHelp        bool
@@ -68,15 +72,16 @@ type CommonFlags struct {
 }
 
 type CommonOptions struct {
-	Timeout        time.Duration
-	OutputMode     checkreport.OutputMode
-	CacheBackend   string
-	IgnoreErrors   []string
-	IgnoreErrorSet map[string]bool
-	Verbosity      int
-	ShowHelp       bool
-	ShowVersion    bool
-	ShowErrorSlugs bool
+	Timeout               time.Duration
+	OutputMode            checkreport.OutputMode
+	CacheBackend          string
+	TransportFamilyPolicy ipfamily.Policy
+	IgnoreErrors          []string
+	IgnoreErrorSet        map[string]bool
+	Verbosity             int
+	ShowHelp              bool
+	ShowVersion           bool
+	ShowErrorSlugs        bool
 }
 
 var stdoutWriter io.Writer
@@ -128,6 +133,15 @@ func CacheBackendOptionDescription() string {
 		"Unsupported or unreachable backends are reported in runtime diagnostics and do not change probe status."
 }
 
+func IPFamilyOptionDescription() string {
+	return "Transport address-family policy.\n" +
+		"auto detects local IPv4/IPv6 reachability and uses only the families that work from the probing host.\n" +
+		"ipv4 forces IPv4-only transport.\n" +
+		"ipv6 forces IPv6-only transport.\n" +
+		"dual attempts both families regardless of local auto-detection.\n" +
+		"Applies to transport endpoints, not to DNS payload semantics such as signed IPv6 data."
+}
+
 func EffectiveProgramName(programName, defaultBinaryName string) string {
 	name := strings.TrimSpace(filepath.Base(programName))
 	if name == "" || name == "." || name == string(filepath.Separator) {
@@ -160,6 +174,9 @@ func (f *CommonFlags) Register(fs *flag.FlagSet, defaultTimeout string) {
 	fs.StringVar(&f.Timeout, "timeout", defaultTimeout, "overall timeout")
 	fs.StringVar(&f.Output, "output", "nagios", "output mode: nagios|json")
 	fs.StringVar(&f.CacheBackend, "cache-backend", "", "shared cache backend DSN")
+	fs.StringVar(&f.IPFamily, "ip-family", string(ipfamily.PolicyAuto), "transport family policy: auto|ipv4|ipv6|dual")
+	fs.BoolVar(&f.UseIPv4, "use-ipv4", false, "force IPv4 transport")
+	fs.BoolVar(&f.UseIPv6, "use-ipv6", false, "force IPv6 transport")
 	fs.StringVar(&f.IgnoreErrorsRaw, "ignore-errors", "", "comma-separated error slugs to suppress")
 	fs.IntVar(&f.Verbosity, "v", 0, "verbosity level 0..3")
 	fs.IntVar(&f.Verbosity, "verbose", 0, "verbosity level 0..3")
@@ -183,18 +200,50 @@ func (f *CommonFlags) Resolve(hasSlug func(string) bool) (CommonOptions, error) 
 	if err != nil {
 		return CommonOptions{}, err
 	}
+	familyPolicy, err := f.resolveIPFamilyPolicy()
+	if err != nil {
+		return CommonOptions{}, err
+	}
 
 	return CommonOptions{
-		Timeout:        timeout,
-		OutputMode:     outputMode,
-		CacheBackend:   strings.TrimSpace(f.CacheBackend),
-		IgnoreErrors:   ignoreErrors,
-		IgnoreErrorSet: ignoreErrorSet,
-		Verbosity:      verbosity.Clamp(f.baseVerbosity + f.Verbosity),
-		ShowHelp:       f.ShowHelp,
-		ShowVersion:    f.ShowVersion,
-		ShowErrorSlugs: f.ShowErrorSlugs,
+		Timeout:               timeout,
+		OutputMode:            outputMode,
+		CacheBackend:          strings.TrimSpace(f.CacheBackend),
+		TransportFamilyPolicy: familyPolicy,
+		IgnoreErrors:          ignoreErrors,
+		IgnoreErrorSet:        ignoreErrorSet,
+		Verbosity:             verbosity.Clamp(f.baseVerbosity + f.Verbosity),
+		ShowHelp:              f.ShowHelp,
+		ShowVersion:           f.ShowVersion,
+		ShowErrorSlugs:        f.ShowErrorSlugs,
 	}, nil
+}
+
+func (f *CommonFlags) resolveIPFamilyPolicy() (ipfamily.Policy, error) {
+	raw := strings.TrimSpace(f.IPFamily)
+	switch {
+	case f.UseIPv4 && f.UseIPv6:
+		if raw != "" && raw != string(ipfamily.PolicyAuto) && raw != string(ipfamily.PolicyDual) {
+			return "", ErrInputConstraint(InputRefIPFamily, "cannot combine --ip-family with both --use-ipv4 and --use-ipv6 unless the policy is dual")
+		}
+		return ipfamily.PolicyDual, nil
+	case f.UseIPv4:
+		if raw != "" && raw != string(ipfamily.PolicyAuto) && raw != string(ipfamily.PolicyIPv4) {
+			return "", ErrInputConstraint(InputRefIPFamily, "cannot combine --ip-family with --use-ipv4 unless the policy is ipv4")
+		}
+		return ipfamily.PolicyIPv4, nil
+	case f.UseIPv6:
+		if raw != "" && raw != string(ipfamily.PolicyAuto) && raw != string(ipfamily.PolicyIPv6) {
+			return "", ErrInputConstraint(InputRefIPFamily, "cannot combine --ip-family with --use-ipv6 unless the policy is ipv6")
+		}
+		return ipfamily.PolicyIPv6, nil
+	default:
+		policy, err := ipfamily.ParsePolicy(raw)
+		if err != nil {
+			return "", ErrInvalidEnum(InputRefIPFamily, raw, "auto", "ipv4", "ipv6", "dual")
+		}
+		return policy, nil
+	}
 }
 
 func ParseTimeout(raw, flagName string) (time.Duration, error) {

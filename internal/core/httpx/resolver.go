@@ -6,8 +6,10 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/habralab/habr-nagios-plugins/internal/core/ipfamily"
 	"github.com/miekg/dns"
 
 	"github.com/habralab/habr-nagios-plugins/internal/core/dnsresolver"
@@ -28,6 +30,8 @@ var newDialContext = func(timeout time.Duration) func(context.Context, string, s
 	return (&net.Dialer{Timeout: timeout}).DialContext
 }
 
+var detectTransportFamilyCapabilities = ipfamily.DetectCapabilities
+
 type DNSResolver interface {
 	Lookup(context.Context, string, uint16) (dnsresolver.LookupResult, error)
 }
@@ -37,13 +41,20 @@ func newResolverDialContext(clientTimeout time.Duration, opts Options) func(cont
 	if resolver == nil {
 		resolver = newBundledResolver(effectiveDNSLookupTimeout(opts), opts.CacheBackend)
 	}
+	if configured, ok := resolver.(interface{ SetTransportFamilyPolicy(ipfamily.Policy) }); ok {
+		configured.SetTransportFamilyPolicy(normalizedTransportFamilyPolicy(opts.TransportFamilyPolicy))
+	}
 	if opts.ResolverObserver != nil {
 		opts.ResolverObserver(resolver)
 	}
-	return resolverDialContext(resolver, effectiveDNSLookupTimeout(opts), newDialContext(effectiveDialTimeout(clientTimeout)))
+	return resolverDialContext(resolver, effectiveDNSLookupTimeout(opts), effectiveDialTimeout(clientTimeout), normalizedTransportFamilyPolicy(opts.TransportFamilyPolicy), newDialContext(effectiveDialTimeout(clientTimeout)))
 }
 
-func resolverDialContext(resolver DNSResolver, lookupTimeout time.Duration, dialFn func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+func resolverDialContext(resolver DNSResolver, lookupTimeout, dialTimeout time.Duration, policy ipfamily.Policy, dialFn func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	var (
+		detectOnce sync.Once
+		detected   ipfamily.Capabilities
+	)
 	return func(ctx context.Context, network string, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
@@ -56,6 +67,17 @@ func resolverDialContext(resolver DNSResolver, lookupTimeout time.Duration, dial
 		ips, err := lookupHostIPs(ctx, resolver, host, lookupTimeout)
 		if err != nil {
 			return nil, err
+		}
+		caps := policy.EffectiveCapabilities(ipfamily.Capabilities{})
+		if policy.RequiresDetection() {
+			detectOnce.Do(func() {
+				detected = detectTransportFamilyCapabilities(ctx, dialTimeout)
+			})
+			caps = policy.EffectiveCapabilities(detected)
+		}
+		ips = ipfamily.FilterIPs(ips, caps)
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("no usable addresses for %s after applying %s transport family policy", address, policy)
 		}
 		var lastErr error
 		for _, ip := range ips {
@@ -70,6 +92,13 @@ func resolverDialContext(resolver DNSResolver, lookupTimeout time.Duration, dial
 		}
 		return nil, fmt.Errorf("no usable addresses for %s", address)
 	}
+}
+
+func normalizedTransportFamilyPolicy(policy ipfamily.Policy) ipfamily.Policy {
+	if policy == "" {
+		return ipfamily.PolicyAuto
+	}
+	return policy
 }
 
 func lookupHostIPs(ctx context.Context, resolver DNSResolver, host string, timeout time.Duration) ([]net.IP, error) {

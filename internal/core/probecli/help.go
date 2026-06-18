@@ -11,6 +11,7 @@ type CommonHelpConfig struct {
 	DefaultTimeout        string
 	TimeoutExamples       []string
 	CacheBackendExamples  []string
+	IPFamilyExamples      []string
 	OutputJSONLine        string
 	IgnoreErrorsExample   string
 	IncludeIgnoreErrors   bool
@@ -21,6 +22,7 @@ type CommonHelpConfig struct {
 	IncludeOutput         bool
 	IncludeTimeout        bool
 	IncludeCacheBackend   bool
+	IncludeIPFamily       bool
 }
 
 type HelpDocument struct {
@@ -45,6 +47,7 @@ func DefaultCommonHelpConfig(defaultTimeout, outputJSONLine, ignoreErrorsExample
 		IncludeOutput:         true,
 		IncludeTimeout:        true,
 		IncludeCacheBackend:   true,
+		IncludeIPFamily:       true,
 	}
 }
 
@@ -130,6 +133,23 @@ func CommonHelpOptions(cfg CommonHelpConfig) []clihelp.Option {
 		out = append(out, clihelp.Option{
 			Long:        "--cache-backend",
 			Description: CacheBackendOptionDescription(),
+			Examples:    examples,
+		})
+	}
+	if cfg.IncludeIPFamily {
+		examples := append([]string(nil), cfg.IPFamilyExamples...)
+		if len(examples) == 0 {
+			examples = []string{
+				"--ip-family auto",
+				"--ip-family ipv4",
+				"--ip-family dual",
+				"--use-ipv4",
+				"--use-ipv6",
+			}
+		}
+		out = append(out, clihelp.Option{
+			Long:        "--ip-family",
+			Description: IPFamilyOptionDescription(),
 			Examples:    examples,
 		})
 	}

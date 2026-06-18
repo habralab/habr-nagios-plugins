@@ -35,6 +35,7 @@ func Run(programName string, args []string) int {
 		Verbosity:       func(cfg sitemap.Config) int { return cfg.Verbosity },
 		DecorateReport: func(ctx context.Context, cfg sitemap.Config, report *checkreport.Report) {
 			probecli.DecorateReportWithCacheBackendInspection(ctx, cfg.CacheBackend, cfg.HTTPClient == nil, report)
+			probecli.DecorateReportWithTransportFamilyRuntime(ctx, cfg.HTTP.TransportFamilyPolicy, cfg.Timeout, report)
 		},
 	})
 }
@@ -69,6 +70,7 @@ func parseFlags(binName string, args []string) (sitemap.Config, error) {
 	cfg.MaxURLs = inputs.Int("max_urls")
 	cfg.HTTP.UserAgent = inputs.String("user_agent")
 	cfg.HTTP.InsecureSkipVerify = inputs.Bool("insecure_skip_verify")
+	cfg.HTTP.TransportFamilyPolicy = resolved.TransportFamilyPolicy
 	cfg.Timeout = resolved.Timeout
 	cfg.CacheBackend = resolved.CacheBackend
 	cfg.Verbosity = resolved.Verbosity
