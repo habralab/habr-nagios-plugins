@@ -35,7 +35,7 @@ define BIN_NAME
 $(if $(strip $(BIN_VENDOR)),$(BIN_PREFIX)_$(BIN_VENDOR)_$(1),$(BIN_PREFIX)_$(1))
 endef
 
-.PHONY: build build-all build-debug check fmt vet lint test test-integration test-live package-prepare package-changelog package-deb package-deb-source package-lint package-clean clean distclean cross help FORCE
+.PHONY: build build-all build-debug check fmt vet lint test test-integration test-live package-prepare package-changelog package-deb package-deb-source package-orig package-lint package-clean clean distclean cross help FORCE
 
 build: build-all
 
@@ -90,7 +90,10 @@ package-changelog:
 package-deb:
 	dpkg-buildpackage -us -uc -b
 
-package-deb-source:
+package-orig:
+	./scripts/package-orig.sh
+
+package-deb-source: package-orig
 	dpkg-buildpackage -us -uc -S
 
 package-lint:

@@ -11,7 +11,7 @@ override_dh_auto_build:
 	$(MAKE) build BIN_VENDOR=habr GO_BUILDMODE=pie GO_EXTRA_LDFLAGS='-linkmode=external -extldflags=-Wl,-z,relro,-z,now'
 
 override_dh_auto_test:
-	$(MAKE) test
+	if ! echo "$(DEB_BUILD_OPTIONS)" | grep -qw nocheck; then $(MAKE) test; fi
 
 override_dh_auto_clean:
 	$(MAKE) distclean

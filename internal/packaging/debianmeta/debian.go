@@ -162,7 +162,7 @@ func Render(spec PackageSpec) ([]PackageFile, error) {
 	for _, probe := range spec.Probes {
 		files = append(files,
 			PackageFile{
-				Path: "debian/" + probe.PackageName + ".install",
+				Path:    "debian/" + probe.PackageName + ".install",
 				Content: fmt.Sprintf("build/%s usr/lib/nagios/plugins/\n", probe.BuildBinaryName),
 			},
 			PackageFile{

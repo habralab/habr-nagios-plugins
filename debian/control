@@ -14,3 +14,35 @@ Description: Validate website sitemap trees for Nagios-style monitoring
  Habr Nagios Plugins probe package for sitemap monitoring.
  .
  Installs the check_habr_sitemap plugin under /usr/lib/nagios/plugins/.
+
+Package: habr-nagios-plugin-robots
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Validate robots.txt policies for Nagios-style monitoring
+ Habr Nagios Plugins probe package for robots.txt monitoring.
+ .
+ Installs the check_habr_robots plugin under /usr/lib/nagios/plugins/.
+
+Package: habr-nagios-plugin-dnschain
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Validate authoritative DNS delegation and DNSSEC chains
+ Habr Nagios Plugins probe package for DNS delegation and DNSSEC monitoring.
+ .
+ Installs the check_habr_dnschain plugin under /usr/lib/nagios/plugins/.
+
+Package: habr-nagios-plugin-dnsrr
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Validate authoritative DNS resource records
+ Habr Nagios Plugins probe package for authoritative DNS RR monitoring.
+ .
+ Installs the check_habr_dnsrr plugin under /usr/lib/nagios/plugins/.
+
+Package: habr-nagios-plugin-tls
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Validate TLS services and DANE records
+ Habr Nagios Plugins probe package for TLS, STARTTLS, and DANE monitoring.
+ .
+ Installs the check_habr_tls plugin under /usr/lib/nagios/plugins/.

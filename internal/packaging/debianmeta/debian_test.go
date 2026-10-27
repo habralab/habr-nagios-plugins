@@ -41,22 +41,20 @@ func TestRenderIncludesProbeInstallName(t *testing.T) {
 		t.Fatalf("Render returned error: %v", err)
 	}
 
-	var install string
-	var docs string
+	contents := make(map[string]string, len(files))
 	for _, file := range files {
-		switch file.Path {
-		case "debian/habr-nagios-plugin-sitemap.install":
-			install = file.Content
-		case "debian/habr-nagios-plugin-sitemap.docs":
-			docs = file.Content
+		contents[file.Path] = file.Content
+	}
+	for _, slug := range []string{"dnschain", "dnsrr", "robots", "sitemap", "tls"} {
+		prefix := "debian/habr-nagios-plugin-" + slug
+		install := contents[prefix+".install"]
+		if !strings.Contains(install, "build/check_habr_"+slug+" usr/lib/nagios/plugins/") {
+			t.Errorf("%s install missing namespaced binary mapping: %q", slug, install)
 		}
-	}
-
-	if !strings.Contains(install, "build/check_habr_sitemap usr/lib/nagios/plugins/") {
-		t.Fatalf("install missing direct namespaced binary mapping:\n%s", install)
-	}
-	if !strings.Contains(docs, "README.md") || !strings.Contains(docs, "LICENSE") {
-		t.Fatalf("docs file missing expected entries:\n%s", docs)
+		docs := contents[prefix+".docs"]
+		if !strings.Contains(docs, "README.md") || !strings.Contains(docs, "LICENSE") {
+			t.Errorf("%s docs missing README.md or LICENSE: %q", slug, docs)
+		}
 	}
 }
 

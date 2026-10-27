@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/habralab/habr-nagios-plugins/internal/packaging/catalog"
 	"github.com/habralab/habr-nagios-plugins/internal/packaging/debianmeta"
@@ -95,6 +97,10 @@ func runChangelog(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	generatedAt, err := sourceDateEpoch()
+	if err != nil {
+		return err
+	}
 
 	spec := debianmeta.BuildSpec(debianmeta.Options{
 		SourcePackage:   *sourcePackage,
@@ -106,9 +112,34 @@ func runChangelog(args []string) error {
 		MaintainerEmail: maintainerEmail(),
 		Version:         *version,
 		Commit:          *commit,
+		GeneratedAt:     generatedAt,
 	}, catalog.All)
 
-	return os.WriteFile(*output, []byte(debianmeta.RenderChangelog(spec)), 0o644)
+	entry := debianmeta.RenderChangelog(spec)
+	existing, err := os.ReadFile(*output)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(existing) > 0 {
+		firstLine := strings.SplitN(entry, "\n", 2)[0]
+		if strings.HasPrefix(string(existing), firstLine+"\n") {
+			return fmt.Errorf("changelog already starts with %q; edit that entry instead", firstLine)
+		}
+		entry += "\n" + string(existing)
+	}
+	return os.WriteFile(*output, []byte(entry), 0o644)
+}
+
+func sourceDateEpoch() (time.Time, error) {
+	raw := os.Getenv("SOURCE_DATE_EPOCH")
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds < 0 {
+		return time.Time{}, fmt.Errorf("invalid SOURCE_DATE_EPOCH %q", raw)
+	}
+	return time.Unix(seconds, 0).UTC(), nil
 }
 
 func envOrDefault(key, fallback string) string {

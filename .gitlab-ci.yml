@@ -1,0 +1,39 @@
+stages:
+  - test
+  - package
+
+variables:
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go-mod"
+
+default:
+  image: golang:1.26-bookworm
+  cache:
+    key: "go-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .cache/go-build/
+      - .cache/go-mod/
+
+test:
+  stage: test
+  script:
+    - test -z "$(find cmd internal -name '*.go' -print0 | xargs -0 gofmt -l)"
+    - go vet ./...
+    - go test ./...
+    - go test -tags=integration ./...
+    - make build
+
+package:
+  stage: package
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends build-essential debhelper golang-any
+  script:
+    - make package-prepare
+    - test -z "$(git status --porcelain -- 'debian/*.install' 'debian/*.docs')"
+    - make package-deb
+    - mkdir -p dist
+    - cp ../habr-nagios-plugin-*.deb dist/
+  artifacts:
+    paths:
+      - dist/*.deb

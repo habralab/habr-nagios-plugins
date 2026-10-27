@@ -1,3 +1,12 @@
+habr-nagios-plugins (1.1.0~rc1-1) UNRELEASED; urgency=medium
+
+  * Package robots.txt, DNS chain, DNS RR, and TLS probes alongside sitemap.
+  * Align the source package format with Debian revisioned versions.
+  * Harden TLSA and authoritative DNS probe results.
+  * Omit reference RFC copies from Debian source archives.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Tue, 27 Oct 2026 01:27:39 +0000
+
 habr-nagios-plugins (1.0.0-1) unstable; urgency=medium
 
   * First public release.
