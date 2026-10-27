@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/miekg/dns v1.1.68
+	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
 )
 

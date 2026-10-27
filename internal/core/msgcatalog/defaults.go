@@ -7,6 +7,7 @@ var defaultCatalog = MustMerge(
 	DNSChainEnglishSource(),
 	RobotsEnglishSource(),
 	SitemapEnglishSource(),
+	TLSEnglishSource(),
 )
 
 func DefaultCatalog() Catalog {

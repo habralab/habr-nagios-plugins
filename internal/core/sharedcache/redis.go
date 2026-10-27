@@ -98,36 +98,36 @@ func ParseRedisDSN(raw string) (RedisConfig, BackendDescriptor, error) {
 		}
 		password, _ := u.User.Password()
 		return RedisConfig{
-				Network:  "tcp",
-				Address:  host,
-				Password: password,
-				DB:       db,
-			}, BackendDescriptor{
-				RawDSN:      raw,
-				Kind:        "redis",
-				Transport:   "tcp",
-				External:    true,
-				Supported:   true,
-				Description: "Redis shared cache backend over TCP",
-			}, nil
+			Network:  "tcp",
+			Address:  host,
+			Password: password,
+			DB:       db,
+		}, BackendDescriptor{
+			RawDSN:      raw,
+			Kind:        "redis",
+			Transport:   "tcp",
+			External:    true,
+			Supported:   true,
+			Description: "Redis shared cache backend over TCP",
+		}, nil
 	case "redis+unix":
 		db, err := parseRedisDB(u.Query().Get("db"))
 		if err != nil {
 			return RedisConfig{}, BackendDescriptor{}, err
 		}
 		return RedisConfig{
-				Network:  "unix",
-				Address:  u.Path,
-				Password: u.Query().Get("password"),
-				DB:       db,
-			}, BackendDescriptor{
-				RawDSN:      raw,
-				Kind:        "redis",
-				Transport:   "unix",
-				External:    true,
-				Supported:   true,
-				Description: "Redis shared cache backend over Unix socket",
-			}, nil
+			Network:  "unix",
+			Address:  u.Path,
+			Password: u.Query().Get("password"),
+			DB:       db,
+		}, BackendDescriptor{
+			RawDSN:      raw,
+			Kind:        "redis",
+			Transport:   "unix",
+			External:    true,
+			Supported:   true,
+			Description: "Redis shared cache backend over Unix socket",
+		}, nil
 	case "redis+sentinel", "sentinel":
 		return RedisConfig{}, BackendDescriptor{
 			RawDSN:          raw,

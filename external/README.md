@@ -32,6 +32,10 @@ Rules:
 - prefer stable upstream text or otherwise durable source artifacts
 - do not hand-edit mirrored source documents unless there is a local wrapper explaining why
 - record each mirrored source in `registry.json`
+- include a compact `status` block in `registry.json` for mirrored documents:
+  - RFC entries should carry an `info_url` plus the best locally verified status shape available, such as RFC category, BCP or STD number, and any explicitly verified RFC Editor series status
+  - RFC entries should also carry header-derived publication and relationship metadata when it can be parsed locally, such as `published`, `updates`, and `obsoletes`
+  - non-RFC artifacts should carry a lifecycle-oriented status instead, because they do not have RFC-series maturity semantics
 - keep runtime-consumed files and human-readable docs adjacent when they come from the same upstream source
 - when Go code needs to embed a canonical artifact from `external/`, a package-local `embeddata/` copy may exist as a build shim because `//go:embed` cannot reference parent paths
 
