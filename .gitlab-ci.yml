@@ -8,6 +8,9 @@ variables:
 
 default:
   image: golang:1.26-bookworm
+  tags:
+    - docker
+    - staging
   cache:
     key: "go-${CI_COMMIT_REF_SLUG}"
     paths:
