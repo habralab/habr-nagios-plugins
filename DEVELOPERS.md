@@ -84,7 +84,9 @@ Current probes:
 - `sitemap`: discovery and validation of sitemap entrypoints, trees, and extension payloads
 - `robots`: `robots.txt` availability, syntax, policy, extension-registry, and documented crawler-behavior checks with RFC-oriented, vendor-aware, and strict behavior modes
 - `dnschain`: authoritative delegation and DNSSEC chain checker with a structured report model; scope includes secure delegation hops, parent-side missing-`DS` denial, `NSEC3PARAM` policy and consistency, and sampled final-zone `NSEC3` negative responses
-- `dnsresolver`: embedded iterative DNS resolver with authoritative querying, per-session cache, DNSSEC validation where available, and shared HTTP transport hostname resolution through `httpx`
+- `dnsrr`: thin authoritative DNS RR presence checker with shared authoritative discovery and resolver-backed DNSSEC state for rollout and policy-oriented RR assertions
+- `tls`: TLS transport, PKI, and DNS-backed trust checker; scope includes direct TCP TLS plus SMTP/IMAP STARTTLS, hostname and expiry validation, basic trust-path evaluation, negotiated-version and ALPN reporting, weak TLS 1.2 cipher probing, deprecated TLS 1.0/1.1 probes, SCT presence, stapled or active OCSP modes, and authoritative CAA/DANE lookups through the bundled resolver
+- `dnsresolver` is the embedded iterative DNS resolver used by DNS- and HTTP-backed probes; it provides authoritative querying, per-session cache, DNSSEC validation where available, and shared HTTP transport hostname resolution through `httpx`
 - `dnschain` uses `dnsresolver` for root trust bootstrap, enclosing-zone discovery, zone-chain construction, authoritative fanout, and owner-level authoritative resolution
 - `dnschain`-local DNS-specific code stays narrow and presentation-aware:
   - denial-proof classification and evidence shaping for `dnschain` findings
@@ -97,18 +99,36 @@ Current probes:
   - `Lookup(...)`: the small DNS-like API for a single question and a single effective result
   - `Resolve(...)`: a richer execution API that accepts fanout and consistency policy and can return per-endpoint material plus an aggregated result
   - `ResolveAuthoritative(...)`: the execution API for callers that already know the authoritative server set and want the resolver to perform the fanout and consistency work instead of reimplementing it in the probe
+- additive batch helpers also exist beside those single-question surfaces:
+  - `LookupBatch(...)`: ordered orchestration helper for multiple DNS questions within one resolver session
+  - `ResolveAuthoritativeBatch(...)`: ordered orchestration helper for multiple authoritative fanout questions against one authoritative server set and one execution policy
+- if a richer resolver-side session or batch API is introduced, it should live beside those existing surfaces rather than replacing them; the small DNS-shaped API remains the stable default for thin probes, while heavier DNS-backed probes may opt into the richer execution surface for shared session caches, grouped questions, and deeper diagnostics
 - new resolver features should prefer explicit execution policy objects such as fanout mode, consistency mode, and glue-acceptance mode over ad-hoc booleans; the resolver is the execution engine, while probes remain the business interpreters of the returned picture
 - when a probe needs a yes/no answer such as "did any authoritative server publish this RRset" or "are all authoritative answers identical", that decision should be expressible through resolver execution options or through neutral assessments returned by the resolver, rather than through duplicated per-probe loops
-- `dnsresolver` caches are intentionally per-resolver and therefore per probe run; they must not survive across runs
+- `dnsresolver` in-process caches are intentionally per-resolver and therefore per probe run; optional external shared-cache backends are additive acceleration layers and must not change probe correctness
 - cache keys must stay specific enough to avoid poisoning neighboring checks: simple lookups key on question, while richer execution results must also key on the authoritative server set and the execution policy such as fanout and consistency mode
+- per-resolver caches should be paired with per-resolver inflight suppression for expensive repeated work such as identical lookups, authoritative fanout plans, and zone validation, so future probe-side parallelism does not multiply wire traffic inside a single run
 - `dnsresolver` also keeps per-resolver endpoint health memory such as observed success, timeout, and RTT trends; that state is execution-local, affects upstream ordering, and must not leak across probe runs
+- transport-facing probes and shared network helpers expose one common IP-family policy surface:
+  - `auto`: detect locally usable IPv4/IPv6 transport and use only working families for endpoint transport
+  - `ipv4`: force IPv4 transport only
+  - `ipv6`: force IPv6 transport only
+  - `dual`: attempt both families even if local auto-detection would suppress one of them
+- `dnsresolver` applies that policy to iterative DNS and authoritative fanout only as transport execution policy; it does not rewrite DNS payload semantics such as signed `AAAA` data, DNSSEC proofs, or authoritative RR contents
+- the current implementation is a capability filter, not a Happy-Eyeballs race between IPv4 and IPv6 transports
+- local family detection is layered:
+  - a fast local inspection classifies each family as `available`, `hard_unavailable`, or `unknown`
+  - `hard_unavailable` is reserved for strong host-local facts such as no usable non-loopback address, only link-local IPv6, missing up non-loopback interfaces, or local transport errors such as `EAFNOSUPPORT`, `ENETUNREACH`, or `EADDRNOTAVAIL`
+  - `unknown` means the host shape did not prove absence and an external probe is still needed before the family is treated as usable
+  - external family probes are only attempted for `unknown` families
+- transport-family assessment is cached in-process for a short TTL and reused across the current process lifetime as host-runtime fact; this cache is execution-local and distinct from resolver DNS-answer caching
+- structured runtime output contains both the effective family selection and the assessment reasons so probe JSON or verbose output can explain why `auto` suppressed one family on the local host
 - default resolver execution policy should stay laboratory-friendly unless a probe explicitly requests stricter behavior: partial or out-of-bailiwick additional-address material may still be used as hints, while missing or suspect glue should trigger best-effort completion of the remaining `NS` targets instead of short-circuiting the delegation walk
 
 Candidate probe directions:
 
 - `oidc`: OIDC discovery and issuer metadata checker; likely scope includes `/.well-known/openid-configuration` reachability, issuer-self-consistency, endpoint presence, JWKS publication, and TLS or DNS-backed prerequisites where they materially affect identity bootstrap
 - `dane`: DANE policy checker for HTTP- and SMTP-oriented targets; a separate probe would need a clear value boundary such as protocol-specific DANE policy, MX-target walking, or mail-routing semantics rather than duplicating generic TLSA matching logic that may later live inside a broader TLS or DNS policy family
-- `tls` / `x509`: certificate and transport-security probe family; likely scope includes modern and deprecated handshake policy, certificate identity and expiry, trust-path validation, revocation signals, and multi-endpoint semantic comparison across resolved service addresses
 - `rss` / `atom`: feed discovery and validity checker; likely scope includes feed discovery from HTML and autodiscovery links, format and XML well-formedness, declared metadata consistency, basic HTTP freshness semantics, and publisher-facing issues such as broken entry links or invalid timestamps
 
 Direction rule:
@@ -118,16 +138,112 @@ Direction rule:
 Current resolver-surface refactor plan:
 
 - current state:
-- `dnsresolver` already exposes a small `Lookup(...)` layer plus richer execution layers such as `Resolve(...)` and `ResolveAuthoritative(...)`
-- resolver caches, execution policy, and endpoint-health memory are already per resolver instance and therefore per probe run
-- shared HTTP transport already prefers `dnsresolver` rather than silently depending on the host OS recursive resolver
+- `dnsresolver` exposes a small `Lookup(...)` layer plus richer execution layers such as `Resolve(...)` and `ResolveAuthoritative(...)`
+- resolver in-process caches, execution policy, and endpoint-health memory are per resolver instance and therefore per probe run
+- shared HTTP transport prefers `dnsresolver` rather than silently depending on the host OS recursive resolver
+- phased execution plan:
+- phase 1: deepen internal per-run execution caches without changing probe-facing contracts
+  - cache enclosing-zone and final-authority scaffolding per owner name so repeated `A` + `AAAA` + `CAA` + `TLSA` work can reuse one authority-discovery path
+  - cache reusable zone-chain and authoritative-server material below the final lookup result so repeated DNSSEC-backed lookups do not cold-start every delegation walk
+  - keep the simple `Lookup(...)`, `Resolve(...)`, and `LookupEffectiveCAA(...)` surfaces unchanged while they benefit from the deeper internal caches
+  - extend deterministic resolver tests so repeated related lookups prove that intermediate discovery work is actually reused
+  - compare cache structure, cache scope, and reuse policies against the three locally mirrored reference resolver codebases before freezing the internal cache model; where their behavior is clearly better suited to our execution style, prefer borrowing the structure or policy rather than inventing needless divergence
+- phase 2: extend richer additive resolver-side execution surfaces
+  - keep the existing batch helpers beside the classic DNS-shaped APIs and add a deeper optional session API only where grouped execution or trace sharing materially benefits heavier probes
+  - let heavier probes request grouped questions and shared execution traces while thin probes remain on the simple contract
+  - keep the richer surface business-neutral around cross-zone or child-zone referrals rather than baking probe assumptions into the resolver
+- phase 3: optional external shared cache backend
+  - keep Redis or any future networked cache transport in shared internal modules rather than embedding backend-specific transport code inside `dnsresolver`; other internal consumers may reuse the same client, dial, timeout, or backend-lifecycle layer later
+  - keep per-run memory caches authoritative for one execution and make the external backend purely additive and opt-in
+  - CLI and config should speak in terms of a generic cache-backend DSN rather than a Redis-specific flag; backend selection belongs to the shared cache layer, not to `dnsresolver` or individual probes
+  - start with positive-result and scaffolding cache artifacts only; negative and transport-failure caching remains disabled until there is a stronger policy model
+  - initial TTL policy may follow the authoritative DNS TTL of the cached artifact when an operator explicitly enables the backend
+  - intended first backend is Redis, but backend failure or unavailability must degrade to cache miss rather than to probe failure
+  - namespace Redis keyspace by module family and artifact kind so resolver-owned entries do not collide with future consumers and can evolve independently
+  - before adding live Redis smoke coverage, assess local execution options such as an unprivileged local instance or Unix-socket mode and only run those tests when the capability is present
+- Redis cache contract for the first external-cache phase:
+  - the Redis backend is a local or near-local acceleration layer for components under our control, not a shared multi-tenant cache; key naming therefore does not need a repository-wide vanity prefix, but it must still be namespaced by internal module family and artifact kind
+  - preferred key shape is module-oriented and versioned, for example:
+    - `dnsresolver:v1:authority:<owner>`
+    - `dnsresolver:v1:delegation:<zone>`
+    - `dnsresolver:v1:lookup:<qname>:<qtype>`
+    - `dnsresolver:v1:resolve:<resolve-key>`
+    - `dnsresolver:v1:validation:<zone>`
+    - future consumers should use their own module prefix rather than appending unrelated artifact kinds under `dnsresolver`
+  - resolver-side cache artifacts should stay explicit and versioned rather than storing opaque ad-hoc blobs
+  - the cache model should stay close to resolver-native DNS semantics first, with a small derived layer only where the laboratory resolver needs reusable execution state:
+    - canonical DNS-like layer:
+      - `lookup`: effective `Lookup(...)` result for one question, including answer RR material, signatures when present, DNSSEC state, and authenticated no-data fact when present
+      - `resolve`: effective `ResolveAuthoritative(...)` result for one question plus one normalized authoritative-server set and execution policy, including per-endpoint answer material and consistency assessment
+      - future refactors may split this toward a more explicit `message` and `rrset` internal model, but the stored artifact should still represent DNS answer material rather than probe-specific verdicts
+    - derived execution layer:
+    - `authority`: reusable closest-apex or enclosing-zone authority material for a name, including the final authoritative server set; shared-storage payloads should stay compact and must not duplicate full delegation-path material that already lives in `delegation`
+    - `delegation`: reusable parent-to-child delegation-path prefixes keyed by zone apex so sibling names or sibling zones can reuse intermediate authority such as `.com`; each hop records who delegated to whom plus the parent and child server material used to advance the walk
+    - `validation`: reusable DNSSEC chain-validation state for a zone apex, including validated DNSKEY material, verdict, and TTL
+  - the derived layer exists because this repository uses a laboratory recursive resolver, not only a packet cache; the cache must preserve reusable execution knowledge such as delegated authority and validated trust-chain state, but it should not grow probe-shaped business payloads
+  - where both a canonical DNS-like artifact and a derived artifact can express the same thing, prefer the canonical form and keep the derived artifact minimal
+  - values should be self-describing and versioned so readers can reject stale schema assumptions safely; payloads should carry at least:
+    - artifact kind
+    - schema version
+    - authoritative TTL used for expiry
+    - store timestamp
+    - serialized payload
+  - shared-cache payload shape should stay compact and boring:
+    - the top-level envelope carries the artifact TTL; payloads should not duplicate that top-level TTL unless a nested structure genuinely needs its own TTL semantics
+    - endpoint payloads use `name`, `address`, and optional `port`; default DNS port `53` is implicit and should be omitted from the payload
+    - compact `authority` payloads should omit empty `hops`; when shared authority needs delegation detail, that detail should be loaded from the sibling `delegation` artifact rather than duplicated
+    - per-hop delegation TTL remains part of the `delegation` payload because one Redis key TTL is not enough to preserve the TTL semantics of individual delegation hops inside a reusable path prefix
+  - TTL derivation should come from authoritative DNS material rather than from backend-local heuristics:
+    - lookup artifacts use the minimum TTL across the returned RRset and its signatures, falling back to denial or authority material for authenticated no-data paths
+    - resolve artifacts use the minimum TTL across the authoritative endpoint RRset material retained in the stored fanout result
+    - zone-chain and authority artifacts use the minimum TTL observed in delegation `NS` plus glue material for the relevant hop set
+    - validation artifacts use the minimum TTL across the validated `DS` and `DNSKEY` material accumulated along the secure chain
+  - Redis reads are opportunistic:
+    - missing key, decode failure, version mismatch, backend timeout, or backend unavailability all degrade to cache miss
+    - probe correctness must not depend on Redis availability
+  - Redis writes are also opportunistic:
+    - first phase allows ordinary read-through `SET` or `SETEX` style writes without distributed locking
+    - duplicate computation by concurrent probe processes is acceptable
+    - last-write-wins is acceptable as long as the key identifies a single artifact kind precisely and the stored entry remains internally self-consistent
+  - distributed locks, Redlock-style coordination, or Lua-based compare-and-set scripts are out of scope for the first phase; inter-process races may reduce cache efficiency but must not affect probe correctness
+  - negative caching remains disabled in the first phase:
+    - do not store `NXDOMAIN`, `NODATA`, `SERVFAIL`, timeout, bogus, or indeterminate execution results externally yet
+    - once negative caching is revisited, it should have its own explicit TTL policy rather than inheriting positive-answer behavior
+  - Redis transport behavior should stay conservative:
+    - small dial, read, and write timeouts
+    - backend connection failure must not materially extend probe runtime
+    - the shared Redis transport or client layer should be reusable by future internal consumers outside `dnsresolver`
+    - the first transport implementation may stay deliberately small:
+      - `redis://host:port[/db]` for TCP
+      - `redis+unix:///path/to/redis.sock?db=N` for local socket mode
+      - `redis+sentinel://...` or sentinel-style multi-host discovery should be rejected early as unsupported, with structured runtime info that probes can surface in verbose or JSON output
+      - minimal command surface such as `GET` and `SETEX` is enough for the initial additive cache layer
+  - default or explicit no-external-cache modes should also be representable as backend DSNs at the shared-cache layer, for example `internal://` or `none://`, so probes can keep a stable generic flag while only the shared-cache whitelist evolves
+- phase 4: extend shared wire-level and backend-aware regression coverage
+  - extend the reusable DNS authoritative harness under `internal/testkit` for timeout, truncation, `SERVFAIL`, referral, missing-glue, and DNSSEC-bogus cases
+  - extend resolver tests to cover cache hit or miss behavior, backend-disabled behavior, backend-failure fallback, and grouped lookup execution reuse
 - near-term follow-up:
 - keep new resolver features expressed through explicit execution-policy objects such as fanout, consistency, and glue-acceptance mode rather than ad-hoc booleans
 - continue shifting duplicated authoritative fanout and consistency loops out of probes and into neutral resolver assessments or execution options
 - keep the resolver API DNS-shaped: question in, message-like answer out, with richer convenience helpers layered above that boundary
-- add a shared DNS wire-level test harness under `internal/testkit`, so resolver and probe tests can exercise truncation, timeout, `SERVFAIL`, missing glue, non-authoritative replies, and DNSSEC-bogus scenarios against real UDP/TCP packet flow instead of relying only on function stubs
+- shared external-cache coverage now includes `authority`, `delegation`, `lookup`, `resolve`, and `validation`; after that, the main remaining DNS-layer work is no longer "basic cacheability" but higher-order execution surfaces and test harnessing
+- per-resolver and probe-side grouped DNS work can use the additive batch helpers for ordered `A` + `AAAA` and authoritative multi-RR fanout slices without changing the single-question contract; `tls` and `dnschain` use that path where it removes duplicated probe-local loops
+- extend per-resolver caching below the final lookup result where repeated probe flows benefit from shared execution state: repeated walks across the same zone should be able to reuse enclosing-zone discovery, delegation-chain material, authoritative server sets, validated DNSKEY or DS state, and NS host-address completion rather than re-walking every branch for each RR type
+- keep any new batch or session surface as an additive API beside `Lookup(...)`, `Resolve(...)`, and `ResolveAuthoritative(...)`:
+  - thin probes should not be forced onto the richer contract
+  - existing probe code should continue to benefit from deeper internal caches even when it stays on the simple API
+  - heavier probes such as `tls` may opt into the richer surface later when they need grouped questions, explicit shared execution traces, or batch-oriented diagnostics
+- shared DNS wire-level test helpers now start in `internal/testkit/dnstest` with a minimal local authoritative UDP/TCP server harness; extend that harness toward truncation, timeout, `SERVFAIL`, referral, missing-glue, and DNSSEC-bogus scenarios instead of duplicating transport stubs in resolver or probe tests
+- when extending `internal/testkit/dnstest`, keep a clear mapping from wire behavior to probe-facing semantics:
+  - transport-only failures such as timeout or refused socket should continue to surface through transport-aware checks or traces rather than masquerading as DNS content verdicts
+  - protocol-level negative or broken answers such as `SERVFAIL`, malformed referral chains, missing glue, or bogus DNSSEC proofs should remain available as DNS-layer facts that probes may interpret differently depending on their policy
+  - the harness should therefore grow reusable packet scenarios first, while probe-local tests stay responsible for asserting how those scenarios map into `OK` or `WARNING` or `CRITICAL` or `UNKNOWN`
 - deferred follow-up:
 - add an explicit shared resolver short-circuit policy such as `--resolver-mode bundled|system` in the shared resolver or transport layer rather than as probe-local conditionals
+- keep future retry behavior as an explicit policy discussion rather than an implicit transport habit:
+  - clarify whether retries belong in low-level exchange, per-endpoint fanout, authoritative server selection, or only in specific probes
+  - distinguish idempotent retry for transport noise from semantic re-query that could hide consistency problems or inflate traffic
+  - decide how retry attempts should appear in resolver trace or stats so operators can tell "first-shot success" from "eventual success after retries"
 - keep TSIG, SIG(0), and EDNS extensions out of the common path until a concrete protocol need justifies them
 
 For `robots`, keep target and policy semantics explicit:
@@ -142,7 +258,7 @@ For `robots`, keep target and policy semantics explicit:
 For DNS-oriented probes, keep target semantics explicit:
 
 - `--zone` means "analyze this zone cut directly"
-- `-H/--hostname` means "start from this owner name, derive its enclosing zone, validate the zone chain, and then validate owner-level RR presence appropriate for the probe"
+- `-H/--hostname` means "start from this owner name, derive its enclosing zone, validate the delegation path, and then validate owner-level RR presence appropriate for the probe"
 - in `dnschain`, hostname mode checks owner-level `CNAME` / `A` / `AAAA` presence and consistency on the final zone authoritative servers, follows same-zone `CNAME` chains to terminal address data, and does not recurse through foreign-zone `CNAME` targets
 
 For service-oriented probes, keep target semantics explicit:
@@ -158,6 +274,89 @@ For multi-address service probes, keep transport fanout separate from semantic c
 - transport fallback across resolved endpoints is useful but is not equivalent to semantic validation across the whole address set
 - if handshake-derived checks such as PKI, OCSP, CT, DANE, or negotiated-parameter policy are evaluated from only one successful endpoint, the probe should treat that as partial address coverage rather than as full service equivalence
 - semantic comparison across the address set should be explicit about what must match, what may differ harmlessly, and what degrades to `WARNING` versus `CRITICAL`
+
+Current TLS follow-up plan:
+
+- current state:
+- `tls` shares the probe CLI/runtime contract, the staged `checkreport` output model, and the message-catalog-backed finding catalog used by the newer probes
+- `tls` exercises real TCP TLS and SMTP `STARTTLS` execution paths, bundled-resolver-backed CAA and DANE lookups, SCT presence detection from certificate or OCSP sources, stapled and active OCSP handling, and local integration coverage for handshake, hostname, DANE, cipher, and revocation paths
+- `tls` intentionally treats missing OCSP staples as informational by default; warning or critical status comes from invalid, revoked, or policy-requested active responder failures
+- `tls` reports address-set transport coverage separately from endpoint-semantic comparison:
+  - `coverage.addresses` captures which resolved `A` or `AAAA` endpoints completed the handshake, which genuinely failed transport, and which were skipped because the current `auto` IP-family policy classified that family as locally unavailable
+  - `coverage.endpoint_semantics` compares transport, PKI, OCSP, CT, DANE, and SNI slices across successful endpoints
+  - `endpoint_semantics.profiles` exposes structured per-endpoint semantic profiles in JSON through evidence items so external renderers do not need to parse the aggregated human-readable profile strings
+  - `pki.graph` exposes a structured certificate graph for the primary detailed endpoint in JSON through graph evidence items; it includes certificate nodes, presented-chain edges, verified-path edges, graph-scope attributes, and explicit node classifications such as `presented_and_verified`, `presented_only`, and `verified_only`, plus rollover-tail hints suitable for external graph rendering
+  - modern web no-SNI divergence is informational unless a stricter future policy mode asks for alerting
+- `tls`, `httpx`, and `dnsresolver` share the same common transport-family flags and policy semantics rather than carrying probe-local spellings:
+  - `--ip-family auto|ipv4|ipv6|dual`
+  - `--use-ipv4` and `--use-ipv6` are sugar aliases for the corresponding forced modes
+- live smoke artifacts are kept under `build/tls-live-matrix-YYYY-MM-DD/` as repository-local comparison points rather than as normative fixtures
+- current live smoke set on 2026-06-19:
+  - `www.cloudflare.com`: secure negative `TLSA` answer under delegated `www.cloudflare.com.`; useful regression target for authority reuse, SOA-owner final-zone refinement, and DNSSEC-authenticated no-data; with the current `auto` family policy the local unavailable `AAAA` endpoints are recorded as skipped rather than as failures, so the current result is `WARNING` only because Cloudflare still accepts a weak TLS 1.2 CBC suite, while CAA and DANE both validate
+  - `google.com`: useful policy-discussion target because it currently accepts TLS 1.0, TLS 1.1, and a weak TLS 1.2 CBC suite on 2026-06-19; this is treated as a real finding set rather than a probe bug
+  - `github.com`: useful weak-CBC discussion target without deprecated TLS 1.0 or 1.1 acceptance in current runs
+  - `habr.com`: project-local target that currently accepts a weak TLS 1.2 CBC suite in live runs
+  - `www.debian.org`: multi-address target with valid DANE-negative behavior and local IPv6 degradation visibility; with the current `auto` family policy the local unavailable `AAAA` endpoints are recorded as skipped and the host presently reports `OK`
+  - `www.wikipedia.org`: compact dual-stack target that highlights local IPv6 transport degradation with a simpler address set than Debian; with the current `auto` family policy the local unavailable `AAAA` endpoint is recorded as skipped and the host presently reports `OK`
+- current default policy for deprecated protocol acceptance is intentionally strict:
+  - successful negotiation of `TLS 1.0` or `TLS 1.1` is `CRITICAL` by default, because the probe is positioned as a preventive security and compliance checker rather than as a pure reachability scanner
+  - weak but modern-path-adjacent findings such as accepted TLS 1.2 CBC suites remain `WARNING` by default because the service still stays on a modern protocol line even though its policy breadth is too permissive
+  - if legacy compatibility ever needs softer handling, add an explicit probe policy mode for deprecated protocol severity instead of silently downgrading the default
+- near-term follow-up:
+- make the current prototype boundary explicit and keep the public CLI surface honest: real `tcp` and `STARTTLS smtp|imap` paths stay in scope, while unimplemented transports or grading-style extensions stay outside the accepted user-facing contract until they have working analyzers behind them
+- make multi-address service semantics explicit in the result model and policy surface: transport fallback may stay opportunistic, but PKI, OCSP, CT, DANE, and negotiated-parameter conclusions should distinguish single-endpoint success from full `A` + `AAAA` coverage
+- report address-set coverage as a first-class result concept: the report should expose discovered addresses, attempted addresses, successful addresses, and semantic divergence per address so `OK` means more than "one endpoint happened to work"
+- finish the per-address aggregation policy for the checks that materially define service identity and trust:
+  - certificate identity and expiry
+  - negotiated protocol and ALPN
+  - trust-path result and chosen path
+  - OCSP and SCT facts
+  - DANE result where applicable
+- finish the current PKI graph phase rather than leaving it implicit in chain-validation text:
+  - distinguish presented chain completeness from built trust-path success
+  - keep degraded or expired alternative tails visible without automatically collapsing the whole service when policy allows a healthy active path
+  - make dual-stack or alternative-branch policy decisions come from path facts rather than narrative heuristics
+  - keep the JSON graph contract semantically explicit for external renderers:
+    - graph payload should distinguish node kinds, edge kinds, presented versus unpresented trust anchors, verified path membership, and path ordering without requiring text parsing
+    - the current structured graph covers the primary detailed endpoint only; if multi-endpoint PKI graph rendering becomes important, add an endpoint-keyed graph slice rather than overloading the single primary graph block
+    - current graph semantics already expose explicit `presented_only` and `verified_only` nodes plus presented-tail hints, but they still do not model richer path-level facts such as named alternative chains, cross-sign lineage labels, or policy-classified rollover branches
+- finish the current revocation and CT phase as a coherent operator-facing model:
+  - stapled OCSP, active responder OCSP, and strict comparison should produce explicit source-aware facts in verbose and JSON
+  - CT should distinguish SCT presence by certificate, stapled OCSP, or TLS extension source and only degrade status when the active policy actually requires CT
+- finish the current cipher and protocol phase at the policy level that matches the implemented probes:
+  - deprecated protocol acceptance stays explicit
+  - weak TLS 1.2 suite acceptance stays explicit
+  - negotiated modern cipher, forward-secrecy characteristics, and ALPN expectations should be surfaced consistently per address
+- treat ALPN as both an observed fact and an optional policy boundary:
+  - negotiated ALPN should remain visible in structured output even when the user did not ask for a specific expected value
+  - explicit expectations such as `h2` should stay probe policy, not an implicit default for every TLS service
+  - ALPN facts may inform later transport expansion, but QUIC or HTTP/3 probing remains a separate future transport slice rather than something inferred from a TCP TLS handshake alone
+- add an explicit SNI or no-SNI execution slice for TCP TLS so the probe can surface virtual-host surprises or default-certificate divergence instead of leaving that class of issue to external tools:
+  - for contemporary web TLS this slice is informational by default; many legitimate HTTPS deployments do not promise a meaningful no-SNI fallback profile
+  - if no-SNI behavior later needs to become alertable, it should do so through an explicit policy mode rather than as the baseline web expectation
+- keep ECH work separate from ordinary SNI checks:
+  - TLS 1.3 still uses the ordinary `server_name` extension as part of the visible ClientHello path in the non-ECH case, and servers may require it; no-SNI and SNI-selected profile comparison therefore remains useful even if ECH later enters scope
+  - ECH readiness depends on external bootstrap material rather than on the TCP TLS handshake alone; for HTTPS-style targets that bootstrap is tied to SVCB or HTTPS RR semantics and associated ECH configuration delivery
+  - an eventual ECH probe should therefore begin as an explicit readiness or bootstrap slice, not by overloading the existing SNI or no-SNI comparison checks
+  - if active ECH handshakes are added later, they should be reported as a distinct execution slice beside plain SNI and no-SNI TCP TLS, with outcome comparison across those modes rather than silent substitution
+- keep resolver-backed DNS work efficient inside one probe run:
+  - repeated `A` + `AAAA` + `CAA` + `TLSA` work should reuse one resolver instance and eventually one richer zone-session execution path rather than behaving like isolated cold-start walks
+  - resolver output used by TLS should stay explanation-friendly in verbose and JSON when DNS becomes the reason handshake evaluation cannot proceed
+- move any remaining transport- or service-level policy catalogs toward the same shared rule/message rails already used by the newer DNS probe surfaces
+- keep the current timeout split visible and testable: overall `-t/--timeout` budget, DNS sub-deadlines, handshake sub-deadlines, and any future parallel address fanout must compose without hiding time-budget exhaustion
+- freeze the prototype output contract before merge:
+  - `nagios` and `json` outputs should carry the same top-level semantics
+  - structured output should expose addresses, paths, revocation facts, CT facts, DANE or CAA facts, and suppressed findings without probe-local ambiguity
+- keep a minimal live regression corpus and saved JSON artifacts for representative happy-path and degraded-path targets so output drift is caught before deeper refactors
+- keep family-gated transport interpretation explicit in live matrix notes:
+  - current resolver behavior filters unreachable DNS IP families up front for iterative DNS and authoritative fanout
+  - service endpoint transport coverage in `auto` mode records locally unavailable families as skipped rather than as failed, so a host-local `IPv6` outage does not by itself trigger `tls_endpoint_failed`
+  - forced modes such as `ipv6` or `dual` remain intentionally strict and may still surface those same endpoints as transport failures
+  - if a future transport layer adopts real Happy Eyeballs for service handshakes, that should be reported as a transport execution strategy change rather than silently changing the meaning of coverage findings
+- deferred follow-up:
+- add QUIC / HTTP/3 transport coverage behind the existing transport contract instead of probe-local option drift
+- deepen certificate-path graph handling for alternative chains, cross-signatures, and configurable treatment of expired rollover tails or degraded dual-stack branches
+- broaden revocation and cipher policy beyond the current OCSP and weak-suite focus when there is a stable shared policy representation for those rule families
 
 For shared CLI/runtime modules, prefer domain slices over flat growth:
 
@@ -335,6 +534,12 @@ Current CLI and report-surface refactor plan:
 - continue normalizing shared section families, aggregation hints, and verbosity behavior before adding new probe-local output conventions
 - the default HTTP `User-Agent` should identify the whole tool family, not a single probe binary
 - the default HTTP `User-Agent` should expose only a release tag or `dev`, not branch names or commit hashes
+- temporary branch-split workflow:
+  - the repository is still in a transitional phase where one probe branch may contain both general library refactors and still-unfinished probe-specific work
+  - when that happens, it is acceptable to split the tree manually: stash unfinished probe-specific slices such as `tls` or `dnsrr`, switch to `chore/refactor`, and commit only the shared library, runtime, renderer, parser, or documentation layer
+  - this is temporary workflow debt rather than a desired steady-state release process
+  - use it only to avoid mixing unfinished probe semantics into otherwise commit-ready shared refactors
+  - when in doubt, prefer leaving suspicious probe-driven API expansion out of the refactor commit and keep the refactor branch biased toward obviously reusable components
 
 Practical rule for moving code into `internal/core`:
 

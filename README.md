@@ -6,14 +6,18 @@ Repository: `https://github.com/habralab/habr-nagios-plugins`
 
 ## Current Probes
 
-Released probes:
+Release candidate probes:
 
 - `check_sitemap`
 - `check_robots`
-
-Experimental probe:
-
 - `check_dnschain`
+- `check_tls`
+- `check_dnsrr`
+
+All five probes are included in the Debian release candidate packages. Each
+probe's documented coverage limits still apply; in particular, `check_tls`
+supports TCP and SMTP/IMAP STARTTLS, not QUIC, while `check_dnschain` does not
+recursively validate CNAME targets in other zones.
 
 `check_sitemap` validates sitemap discovery and sitemap tree integrity in a way that is useful for monitoring:
 
@@ -55,6 +59,23 @@ Experimental probe:
 - authoritative transport probing attempts both IPv4 and IPv6 endpoints when available, and endpoint health is tracked per advertised address rather than only per nameserver name
 - transport and DNSSEC semantics are reported separately: query timeouts and endpoint reachability issues surface as transport findings, while non-authoritative answers, bad signatures, and invalid proofs stay in delegation or DNSSEC findings
 
+`check_tls` is a TLS transport and PKI integrity checker:
+
+- short Nagios-style output by default
+- `json` output for the same structured waterfall report
+- scope includes direct TCP TLS plus SMTP/IMAP STARTTLS handshakes, negotiated version and ALPN reporting, certificate hostname and validity checks, basic trust-path validation against system or custom trust roots, weak key detection, negotiated-cipher inspection, weak TLS 1.2 cipher probing, and active downgrade probes for TLS 1.0 and TLS 1.1
+- stapled OCSP responses are validated, optional active responder checks are available through `--ocsp-mode`, SCT presence is surfaced, and the probe performs authoritative CAA and DANE/TLSA lookups through bundled root hints with DNSSEC chain validation when the delegation is signed
+- QUIC, broader cipher preference policy, and deeper certificate-path graph refinement stay outside the current phase
+
+`check_dnsrr` is a thin authoritative DNS RR presence checker:
+
+- short Nagios-style output by default
+- `json` output for the same structured authoritative RR evaluation report
+- authoritative zone discovery through bundled root hints instead of relying on the local recursive resolver
+- checks whether a requested RR type is present on `any`, `all`, `master`, or `none` of the relevant authoritative endpoints
+- optional DNSSEC interpretation modes for the queried RRset: `ignore`, `prefer`, or `require`
+- useful for validating operational rollout of records such as `A`, `AAAA`, `TXT`, `MX`, `CAA`, `_dmarc`, `_acme-challenge`, or similar owner-specific data
+
 ## Goals
 
 - separate binary per check type
@@ -88,11 +109,39 @@ Default local output for the dnschain probe:
 build/check_dnschain
 ```
 
+Default local output for the TLS probe:
+
+```bash
+build/check_tls
+```
+
+Default local output for the DNS RR probe:
+
+```bash
+build/check_dnsrr
+```
+
 If you need a debug-friendlier local build with symbols intact:
 
 ```bash
 make build-debug
 ```
+
+## Test
+
+```bash
+make vet
+make lint
+make test
+make test-integration
+make test-live
+```
+
+- `vet`: run `go vet ./...`
+- `lint`: run `go vet` and `staticcheck` when `staticcheck` is installed
+- `test`: default no-network unit and package tests
+- `test-integration`: opt-in deterministic integration suites using local listeners or `httptest`
+- `test-live`: opt-in external live-network regression suites
 
 ## Usage
 
@@ -112,6 +161,10 @@ make build-debug
 ./build/check_dnschain -H habr.com -t 60s --query-timeout 3s -vv
 ./build/check_dnschain --zone habr.com --query-timeout 3s -vv
 ./build/check_dnschain --zone com --ignore-errors dnschain_child_soa_inconsistent -v
+./build/check_tls -H www.example.com --output json
+./build/check_tls -H smtp.example.com -p 587 --starttls smtp -vv
+./build/check_dnsrr -H www.example.com --rrtype A --mode any
+./build/check_dnsrr --zone example.com --owner _dmarc.example.com --rrtype TXT --mode all --dnssec-mode prefer
 ```
 
 Installed Debian package payloads:
@@ -119,6 +172,9 @@ Installed Debian package payloads:
 ```bash
 /usr/lib/nagios/plugins/check_habr_sitemap
 /usr/lib/nagios/plugins/check_habr_robots
+/usr/lib/nagios/plugins/check_habr_dnschain
+/usr/lib/nagios/plugins/check_habr_dnsrr
+/usr/lib/nagios/plugins/check_habr_tls
 ```
 
 ## Cross-build
@@ -141,12 +197,29 @@ Build a Debian package:
 make package-deb
 ```
 
-For target-specific Ubuntu builds, refresh the changelog entry first:
+Build a Debian source package from a committed release tree:
 
 ```bash
-make package-changelog DEB_DISTRIBUTION=noble VERSION=v1.0.0
+make package-deb-source
+```
+
+This creates an upstream tarball from the committed source, excluding `debian/`,
+then builds the Debian source package. Uncommitted source or packaging changes
+are rejected so the tarball and Debian diff describe the same revision.
+
+For a target-specific local snapshot build, prepend a changelog entry first:
+
+```bash
+make package-changelog DEB_DISTRIBUTION=noble VERSION=v1.1.0
 make package-deb
 ```
+
+`package-changelog` uses `SOURCE_DATE_EPOCH` when set, so snapshot versions and
+changelog timestamps can be reproduced. It preserves earlier entries and
+refuses to duplicate the current version. Edit the committed changelog entry
+manually for a final release. Release packages include all five
+probes listed above. The GitLab pipeline runs formatting, vet, unit and integration
+tests, all probe builds, and Debian binary packaging before release.
 
 ## Versioning
 
