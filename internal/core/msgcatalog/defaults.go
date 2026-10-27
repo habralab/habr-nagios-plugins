@@ -3,6 +3,7 @@ package msgcatalog
 var defaultCatalog = MustMerge(
 	"en",
 	CommonEnglishSource(),
+	DNSRREnglishSource(),
 	DNSChainEnglishSource(),
 	RobotsEnglishSource(),
 	SitemapEnglishSource(),

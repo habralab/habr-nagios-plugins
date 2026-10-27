@@ -28,6 +28,7 @@ func (liveAnalyzer) Analyze(ctx context.Context, cfg Config, target string) (che
 	defer cancel()
 	started := time.Now()
 	resolver := dnsresolver.NewResolver(cfg.QueryTimeout)
+	resolver.SetTransportFamilyPolicy(cfg.TransportFamilyPolicy)
 	resolver.ConfigureSharedCacheBackendDSN(cfg.CacheBackend)
 	report := checkreport.Report{
 		Probe:         Meta.Slug,
@@ -1456,6 +1457,10 @@ func buildUnknownReport(base checkreport.Report, started time.Time, target, code
 	base.Summary = message
 	base.Findings = append(base.Findings, unknownFinding(code, target, message))
 	base.Findings, base.SuppressedFindings = checkreport.PartitionSuppressedFindings(base.Findings, ignoreSet)
+	base.Status = aggregateStatus(base.Findings)
+	if base.Status == checkreport.StatusOK {
+		base.Summary = "DNS analysis stopped after a suppressed discovery failure"
+	}
 	base.Metrics = []checkreport.Metric{
 		countMetric("findings", len(base.Findings)),
 		countMetric("ignored", len(base.SuppressedFindings)),

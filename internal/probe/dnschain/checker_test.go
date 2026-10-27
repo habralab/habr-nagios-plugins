@@ -114,6 +114,9 @@ func TestBuildUnknownReportSuppressesExactMatchingFailureClass(t *testing.T) {
 	if got, want := len(report.SuppressedFindings), 1; got != want {
 		t.Fatalf("len(SuppressedFindings) = %d, want %d", got, want)
 	}
+	if got, want := report.Status, checkreport.StatusOK; got != want {
+		t.Fatalf("Report.Status = %q, want %q after suppressing the only finding", got, want)
+	}
 	if got, want := report.SuppressedFindings[0].Code, "dnschain_root_dnskey_fetch_failed"; got != want {
 		t.Fatalf("Suppressed finding code = %q, want %q", got, want)
 	}
